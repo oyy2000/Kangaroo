@@ -8,7 +8,7 @@ import torch
 import os
 
 from fastchat.utils import str_to_torch_dtype
-from evaluation.eval import run_eval, reorg_answer_file
+from evaluation.eval_safety import run_eval, reorg_answer_file
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from kangaroo.kangaroo_model import KangarooModel
 
@@ -209,7 +209,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    question_file = f"data/question.jsonl"
+    question_file = f"jailbreak.jsonl"
 
     model = KangarooModel(args.model_path, args.adapter_path, args, EARLY_STOP_LAYER = args.exitlayer)
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
@@ -218,8 +218,8 @@ if __name__ == "__main__":
     assert not args.answer_file
     os.makedirs(f"data/{args.bench_name}/{args.model_id}", exist_ok=True)
 
-    for run in range(3):
-        answer_file = f"data/{args.bench_name}/{args.model_id}/{run}.jsonl"
+    for run in range(1):
+        answer_file = f"data/{args.bench_name}/{args.model_id}/{run}_safety.jsonl"
         print(f"Output to {answer_file}")
 
         run_eval(

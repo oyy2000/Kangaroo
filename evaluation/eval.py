@@ -116,6 +116,10 @@ def get_model_answers(
                 )
                 torch.cuda.synchronize()
                 total_time = time.time() - start_time
+            except:
+                print("ERROR when forwarding ERROR ID: ", question["question_id"])
+                output = "ERROR"
+            try:   
                 output_ids = output_ids[0][len(input_ids[0]):]
                 # be consistent with the template's stop_token_ids
                 if conv.stop_token_ids:
@@ -161,7 +165,7 @@ def get_model_answers(
         choices = []
         for i in range(num_choices):
             cur_accept_lengths_tree = []
-            torch.manual_seed(i)
+            # torch.manual_seed(i)
             conv = get_conversation_template("vicuna")
             turns = []
             idxs = []
