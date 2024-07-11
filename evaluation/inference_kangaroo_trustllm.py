@@ -26,9 +26,8 @@ def generation(
         forward_func,
         model_id,
         question_file,
-        question_begin,
-        question_end,
-        answer_file,
+        answer_file_dir,
+        answer_file_name,
         max_new_tokens,
         num_choices,
         num_gpus_per_model,
@@ -37,7 +36,7 @@ def generation(
 ):
     with open(question_file) as f:
         original_data = json.load(f)
-
+    answer_file = os.path.join(answer_file_dir, answer_file_name)
     if os.path.exists(answer_file):
         with open(answer_file, 'r') as f:
             res_data = json.load(f)
@@ -54,6 +53,7 @@ def generation(
     chunk_size = len(questions) // (num_gpus_total // num_gpus_per_model)  # // 2
     ans_handles = []
     for i in range(0, len(questions), chunk_size):
+
         ans_handles.append(
             get_answers_func(
                 model,
@@ -90,92 +90,100 @@ def get_model_answers(
     print('CUDA VISIBLE DEVICES:', cuda_visible_devices)
 
     accept_lengths_tree = []
+    wall_time_list = []
     for question in tqdm(questions):
-        choices = []
-        cur_accept_lengths_tree = []
-        # torch.manual_seed(i)
-        conv = get_conversation_template("vicuna")
-        turns = []
-        idxs = []
-        new_tokens = []
-        wall_time = []
-        q_prompt = question["prompt"]
-        conv.append_message(conv.roles[0], q_prompt)
-        conv.append_message(conv.roles[1], None)
-        prompt = conv.get_prompt()
-        inputs = tokenizer([prompt], return_tensors="pt").to("cuda")
-        input_ids = inputs.input_ids
-        try:
-            torch.cuda.synchronize()
-            start_time = time.time()
-            output_ids, new_token, idx, accept_length_tree = forward_func(
-                inputs,
-                model,
-                tokenizer,
-                max_new_tokens,
-                **kwargs,
-            )
-            torch.cuda.synchronize()
-            total_time = time.time() - start_time
-            accept_lengths_tree.extend(accept_length_tree)
-            output_ids = output_ids[0][len(input_ids[0]):]
-        except RuntimeError as e:
-            print("ERROR when forwarding question: ", question["prompt"])
-            output = "ERROR"
-
-        try:
-            if conv.stop_token_ids:
-                stop_token_ids_index = [
-                    i
-                    for i, id in enumerate(output_ids)
-                    if id in conv.stop_token_ids
-                ]
-                if len(stop_token_ids_index) > 0:
-                    output_ids = output_ids[: stop_token_ids_index[0]]
-
-            output = tokenizer.decode(
-                output_ids,
-                spaces_between_special_tokens=False,
-            )
-            if conv.stop_str and output.find(conv.stop_str) > 0:
-                output = output[: output.find(conv.stop_str)]
-            for special_token in tokenizer.special_tokens_map.values():
-                if isinstance(special_token, list):
-                    for special_tok in special_token:
-                        output = output.replace(special_tok, "")
-                else:
-                    output = output.replace(special_token, "")
-            output = output.strip()
-
-            if conv.name == "xgen" and output.startswith("Assistant:"):
-                output = output.replace("Assistant:", "", 1).strip()
-        except RuntimeError as e:
-            print("ERROR question: ", question["prompt"])
-            output = "ERROR"
-
-        turns.append(output)
-        idxs.append(int(idx))
-        new_tokens.append(int(new_token))
-        wall_time.append(total_time)
-        cur_accept_lengths_tree.extend(accept_length_tree)
-        conv.messages[-1][-1] = output
-        # torch.cuda.empty_cache()
-        # choices.append({"index": i, "turns": turns, "idxs": idxs, "new_tokens": new_tokens, "wall_time": wall_time,
-        #                 "accept_lengths": cur_accept_lengths_tree})
-
         # Dump answers
-        try:
-            # If 'res' key doesn't exist or its value is empty, generate a new response
-            if "res" not in question or not question['res']:
-                question['res'] = output
-        except Exception as e:
-            # Print error message if there's an issue during processing
-            print(f"Error processing prompt {question['prompt']}: {e}")
+        if "res" not in question or not question['res']:
+            choices = []
+            cur_accept_lengths_tree = []
+            # torch.manual_seed(i)
+            conv = get_conversation_template("vicuna")
+            turns = []
+            idxs = []
+            new_tokens = []
+            wall_time = []
+            q_prompt = question["prompt"]
+            conv.append_message(conv.roles[0], q_prompt)
+            conv.append_message(conv.roles[1], None)
+            prompt = conv.get_prompt()
+            inputs = tokenizer([prompt], return_tensors="pt").to("cuda")
+            input_ids = inputs.input_ids
+            try:
+                torch.cuda.synchronize()
+                start_time = time.time()
+                output_ids, new_token, idx, accept_length_tree = forward_func(
+                    inputs,
+                    model,
+                    tokenizer,
+                    max_new_tokens,
+                    **kwargs,
+                )
+                torch.cuda.synchronize()
+                total_time = time.time() - start_time
+                accept_lengths_tree.extend(accept_length_tree)
+                output_ids = output_ids[0][len(input_ids[0]):]
+            except RuntimeError as e:
+                print("ERROR when forwarding question: ", question["prompt"])
+                output = "ERROR"
 
-        save_json(questions, answer_file)
+            try:
+                if conv.stop_token_ids:
+                    stop_token_ids_index = [
+                        i
+                        for i, id in enumerate(output_ids)
+                        if id in conv.stop_token_ids
+                    ]
+                    if len(stop_token_ids_index) > 0:
+                        output_ids = output_ids[: stop_token_ids_index[0]]
+
+                output = tokenizer.decode(
+                    output_ids,
+                    spaces_between_special_tokens=False,
+                )
+                if conv.stop_str and output.find(conv.stop_str) > 0:
+                    output = output[: output.find(conv.stop_str)]
+                for special_token in tokenizer.special_tokens_map.values():
+                    if isinstance(special_token, list):
+                        for special_tok in special_token:
+                            output = output.replace(special_tok, "")
+                    else:
+                        output = output.replace(special_token, "")
+                output = output.strip()
+
+                if conv.name == "xgen" and output.startswith("Assistant:"):
+                    output = output.replace("Assistant:", "", 1).strip()
+            except RuntimeError as e:
+                print("ERROR question: ", question["prompt"])
+                output = "ERROR"
+
+            turns.append(output)
+            idxs.append(int(idx))
+            new_tokens.append(int(new_token))
+            wall_time.append(total_time)
+            cur_accept_lengths_tree.extend(accept_length_tree)
+            conv.messages[-1][-1] = output
+            # torch.cuda.empty_cache()
+            # choices.append({"index": i, "turns": turns, "idxs": idxs, "new_tokens": new_tokens, "wall_time": wall_time,
+            #                 "accept_lengths": cur_accept_lengths_tree})
+            question['res'] = output
+            question['accept_lengths'] = cur_accept_lengths_tree
+            question['wall_time'] = total_time
+            save_json(questions, answer_file)
+        else:
+            accept_lengths_tree.extend(question['accept_lengths'])
+            # compute the average wall time of all questions
+        wall_time_list.append(total_time)
     
+    print("#Mean wall time: ", np.mean(wall_time_list))
     print("#Mean accepted tokens: ", np.mean(accept_lengths_tree))
+    # create a log file if not exists
+    log_file_path = os.path.join(answer_file_dir, f"log_{args.subtask}.txt")
 
+    with open(log_file_path, 'w') as f:
+        f.write(f"Model: {args.model_id}\n")
+        f.write(f"Total questions: {len(questions)}\n")
+        f.write(f"Mean wall time: {np.mean(wall_time_list)}\n")
+        f.write(f"Mean accepted tokens: {np.mean(accept_lengths_tree)}\n")    
 
 
 def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample=False, max_length = 2048, EARLY_STOP_LAYER = 2, SPECULATIVE_DECODING_STEPS = 6, threshold = 0.6):
@@ -315,17 +323,6 @@ if __name__ == "__main__":
         help="The name of the benchmark question set.",
     )
     parser.add_argument(
-        "--question-begin",
-        type=int,
-        help="A debug option. The begin index of questions.",
-    )
-    parser.add_argument(
-        "--question-end",
-        type=int,
-        help="A debug option. The end index of questions."
-    )
-    parser.add_argument("--answer-file", type=str, help="The output answer file.")
-    parser.add_argument(
         "--max-new-tokens",
         type=int,
         default=1024,
@@ -373,20 +370,31 @@ if __name__ == "__main__":
         help="Override the default dtype. If not set, it will use float16 on GPU.",
     )
 
-    args = parser.parse_args()
+    parser.add_argument(
+        "--subtask",
+        type=str,
+        required=True,
+    )
 
-    question_file = f"data/privacy_leakage.json"
+    parser.add_argument(
+        "--task",
+        type=str,
+        required=True,
+    )
+
+    args = parser.parse_args()
+    
+    question_file = f"data/eval_data/{args.task}/{args.subtask}.json"
 
     model = KangarooModel(args.model_path, args.adapter_path, args, EARLY_STOP_LAYER = args.exitlayer)
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
     do_sample = True
 
-    assert not args.answer_file
-    os.makedirs(f"data/{args.bench_name}/{args.model_id}", exist_ok=True)
-
-    answer_file = f"data/{args.bench_name}/{args.model_id}/privacy_result.jsonl"
+    answer_file_dir = f"data/{args.bench_name}/{args.model_id}/{args.task}"
+    os.makedirs(answer_file_dir, exist_ok=True)
+    answer_file_name = f"{args.subtask}.json"
     
-    print(f"Output to {answer_file}")
+    print(f"Output to {answer_file_dir}/{answer_file_name}")
 
     generation(
         model=model,
@@ -394,9 +402,8 @@ if __name__ == "__main__":
         forward_func=kangaroo_forward,
         model_id=args.model_id,
         question_file=question_file,
-        question_begin=args.question_begin,
-        question_end=args.question_end,
-        answer_file=answer_file,
+        answer_file_dir=answer_file_dir,
+        answer_file_name=answer_file_name,
         max_new_tokens=args.max_new_tokens,
         num_choices=args.num_choices,
         num_gpus_per_model=args.num_gpus_per_model,
@@ -406,5 +413,3 @@ if __name__ == "__main__":
         SPECULATIVE_DECODING_STEPS=args.steps,
         EARLY_STOP_LAYER=args.exitlayer
     )
-
-    # reorg_answer_file(answer_file)
