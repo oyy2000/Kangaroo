@@ -1,7 +1,7 @@
 import argparse
 
 parser = argparse.ArgumentParser(description='sp')
-parser.add_argument('--outdir', type=str, default='/home/ma-user/work/Data/')
+parser.add_argument('--outdir', type=str, default='/home/yo46/learning/decoding/TrustLLM/Kangaroo/data/datasets/')
 args = parser.parse_args()
 
 import os
