@@ -24,6 +24,8 @@ def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample=False, 
     start_index = context_length
     global_tokens[:, :start_index] = context_tokens
 
+    predicted_hiddden_states = []
+    earlyexit_hidden_states = []
     # Init KV-chache and sample the first token
     with torch.no_grad():
         position_ids = global_position_ids[:, :start_index]
@@ -83,14 +85,15 @@ def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample=False, 
                 predict_score = predict_logits.softmax(dim=-1).max().item()
 
             # STEP2: Big model inference
+
             position_ids = global_position_ids[:, start_index:end_index]
             assert model.base_model.past_key_values[EARLY_STOP_LAYER][0].shape[2] == start_index, "{} - {}".format(model.base_model.past_key_values[EARLY_STOP_LAYER][0].shape, start_index)
             assert exited_hidden_states.shape[1] == position_ids.shape[1]
-            hidden_state_, hidden_state = model.base_model.forward_draft_or_large_model(in_features_large=exited_hidden_states, position_ids=position_ids)
+            hidden_state_, hidden_state, all_hidden_states = model.base_model.forward_draft_or_large_model(in_features_large=exited_hidden_states, position_ids=position_ids)
             
             logits = model.head_model(hidden_state).float() # batchsize, input_length, vocab_size
             output_tokens = torch.argmax(logits[:, :, :], dim=-1)
-
+            
             # Verification for greedy decoding
             output_lenght = end_index - start_index
             for i in range(output_lenght):
@@ -100,10 +103,22 @@ def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample=False, 
                     if output_tokens[0, i] == token_eos:
                         stop = True
                     break
-
+            
+            # print4hiddenstates
+            cur_length = start_index - start_index_copy
+            # hiddenstates
+            for token_idx in range(cur_length):
+                token_hidden_state = []
+                for layer_hidden_state in all_hidden_states:
+                    token_hidden_state.append(layer_hidden_state[:,token_idx,:])
+    
+                predicted_hiddden_states.append(token_hidden_state)
+            
             accept_length_list.append(start_index - start_index_copy)
             hidden_state = hidden_state[:, :output_lenght-(end_index-start_index), :]
 
+            
+        
             # STEP 4: Post process KV-cache
             if model.base_model.past_key_values[0][0].shape[2] > start_index:
                 past_key_values_large_ = []
@@ -126,7 +141,7 @@ def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample=False, 
     output_ids = global_tokens[0, :start_index+1].tolist()
     new_token = start_index - context_length + 1
     idx = len(accept_length_list) - 1
-    return [output_ids], new_token, idx, accept_length_list
+    return [output_ids], new_token, idx, accept_length_list, predicted_hiddden_states
 
 
 if __name__ == "__main__":
@@ -209,7 +224,7 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    question_file = f"jailbreak.jsonl"
+    question_file = f"casestudy_jailbreak.jsonl"
 
     model = KangarooModel(args.model_path, args.adapter_path, args, EARLY_STOP_LAYER = args.exitlayer)
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)

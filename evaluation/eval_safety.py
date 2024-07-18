@@ -30,6 +30,7 @@ def run_eval(
         num_choices,
         num_gpus_per_model,
         num_gpus_total,
+        temperature = 0.0,
         **kwargs,
 ):
     questions = load_questions(question_file, question_begin, question_end)
@@ -49,6 +50,12 @@ def run_eval(
 
     chunk_size = len(questions) // (num_gpus_total // num_gpus_per_model)  # // 2
     ans_handles = []
+
+    # hidden_states ------
+    output_s = []
+    output_ids_s = []
+    all_hidden_states_s = []
+    # hidden_states ------
     for i in range(0, len(questions), chunk_size):
         ans_handles.append(
             get_answers_func(
@@ -60,13 +67,30 @@ def run_eval(
                 answer_file,
                 max_new_tokens,
                 num_choices,
+                temperature,
                 **kwargs,
             )
         )
+        # output, output_ids, all_hidden_states = get_answers_func(
+        #         model,
+        #         tokenizer,
+        #         forward_func,
+        #         model_id,
+        #         questions[i: i + chunk_size],
+        #         answer_file,
+        #         max_new_tokens,
+        #         num_choices,
+        #         temperature,
+        #         **kwargs,
+        #     )
+        # output_s.append(output)
+        # output_ids_s.append(output_ids)
+        # all_hidden_states_s.append(all_hidden_states)
 
     if use_ray:
         ray.get(ans_handles)
-
+    
+    # return output_s, output_ids_s, all_hidden_states_s
 
 @torch.inference_mode()
 def get_model_answers(
@@ -78,6 +102,7 @@ def get_model_answers(
         answer_file,
         max_new_tokens,
         num_choices,
+        temperature,
         **kwargs,
 ):
 
@@ -104,20 +129,53 @@ def get_model_answers(
             prompt = conv.get_prompt()
             inputs = tokenizer([prompt], return_tensors="pt").to("cuda")
             input_ids = inputs.input_ids
+    
             try:
                 torch.cuda.synchronize()
                 start_time = time.time()
-                output_ids, new_token, idx, accept_length_tree = forward_func(
-                    inputs,
-                    model,
-                    tokenizer,
-                    max_new_tokens,
-                    **kwargs,
-                )
+
+                if model_id == 'vicuna-7b-v1.3-vanilla-float16-temp-0.0':
+                    output_ids, new_token, idx, accept_length_tree, _ = forward_func(
+                        inputs,
+                        model,
+                        tokenizer,
+                        max_new_tokens,
+                        temperature,
+                        **kwargs,
+                    )
+                elif model_id == 'kangaroo_casestudy':
+                    output_ids, new_token, idx, accept_length_tree, all_hidden_states = forward_func(
+                        inputs,
+                        model,
+                        tokenizer,
+                        max_new_tokens,
+                        **kwargs,
+                    )
+                else:
+                    output_ids, new_token, idx, accept_length_tree, _ = forward_func(
+                        inputs,
+                        model,
+                        tokenizer,
+                        max_new_tokens,
+                        **kwargs,
+                    )
+                
                 torch.cuda.synchronize()
                 total_time = time.time() - start_time
                 accept_lengths_tree.extend(accept_length_tree)
                 output_ids = output_ids[0][len(input_ids[0]):]
+                
+                midlayer_prediction = []
+                for token_id in range(len(all_hidden_states)):
+                    token_prediction = []
+                    token_hidden_states = torch.stack(all_hidden_states[token_id], dim=1)
+                    logits = model.head_model(token_hidden_states).float() # batchsize, vocab_size
+                    output_token = torch.argmax(logits[:, :, :], dim=-1)
+                    midlayer_prediction.append(output_token[0].cpu().tolist())
+                        
+                import ipdb
+                ipdb.set_trace()
+                # output_ids : LLM 输出的所有token的 vocab id     -- midlayer_prediction : LLM所有输出token 对应的2-32层分别的预测 vocab id
             except RuntimeError as e:
                 print("ERROR when forwarding question ID: ", question["question_id"])
                 output = "ERROR"
@@ -158,9 +216,10 @@ def get_model_answers(
             wall_time.append(total_time)
             cur_accept_lengths_tree.extend(accept_length_tree)
             conv.messages[-1][-1] = output
-            # torch.cuda.empty_cache()
-            choices.append({"index": i, "turns": turns, "idxs": idxs, "new_tokens": new_tokens, "wall_time": wall_time,
-                            "accept_lengths": cur_accept_lengths_tree})
+        
+        # torch.cuda.empty_cache()
+        choices.append({"index": i, "turns": turns, "idxs": idxs, "new_tokens": new_tokens, "wall_time": wall_time,
+                        "accept_lengths": cur_accept_lengths_tree})
 
         # Dump answers
         os.makedirs(os.path.dirname(answer_file), exist_ok=True)
@@ -178,6 +237,7 @@ def get_model_answers(
             }
             fout.write(json.dumps(ans_json) + "\n")
     print("#Mean accepted tokens: ", np.mean(accept_lengths_tree))
+    return output, output_ids, all_hidden_states
 
 
 def reorg_answer_file(answer_file):

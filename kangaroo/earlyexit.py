@@ -47,10 +47,34 @@ class EarlyExitLlamaForCausalLM(LlamaForCausalLM):
         attention_mask = self.model._prepare_decoder_attention_mask(
             attention_mask, (batch_size, seq_length), inputs_embeds if in_tokens_small is not None else in_features_large, past_key_values_length
         )
-
+        
+        # if in_features_large is not None:
+        #     import ipdb
+        #     ipdb.set_trace()
+            
         hidden_states = inputs_embeds if in_tokens_small is not None else in_features_large
         LAYERS = self.model.layers[:self.early_exit_layer] if in_tokens_small is not None else self.model.layers[self.early_exit_layer:]
 
+        # change4print  --------
+        # for idx, decoder_layer in enumerate(LAYERS):
+        #     layer_idx = idx if in_tokens_small is not None else idx + self.early_exit_layer
+        #     past_key_value = self.past_key_values[layer_idx] # if self.past_key_values is not None else None
+        #     layer_outputs = decoder_layer(
+        #         hidden_states,
+        #         attention_mask=attention_mask,
+        #         position_ids=position_ids,
+        #         past_key_value=past_key_value,
+        #         output_attentions=False,
+        #         use_cache=use_cache,
+        #     )
+        #     hidden_states = layer_outputs[0]
+        #     self.past_key_values[layer_idx] = layer_outputs[1]
+        
+        # if in_features_large is not None:
+        #     return hidden_states, self.model.norm(hidden_states)
+
+        all_hidden_states = []
+        all_hidden_states.append(hidden_states)
         for idx, decoder_layer in enumerate(LAYERS):
             layer_idx = idx if in_tokens_small is not None else idx + self.early_exit_layer
             past_key_value = self.past_key_values[layer_idx] # if self.past_key_values is not None else None
@@ -63,9 +87,12 @@ class EarlyExitLlamaForCausalLM(LlamaForCausalLM):
                 use_cache=use_cache,
             )
             hidden_states = layer_outputs[0]
+            all_hidden_states.append(hidden_states)
             self.past_key_values[layer_idx] = layer_outputs[1]
         
         if in_features_large is not None:
-            return hidden_states, self.model.norm(hidden_states)
+            return hidden_states, self.model.norm(hidden_states), all_hidden_states
+        
+        # ---------------------
         
         return hidden_states
