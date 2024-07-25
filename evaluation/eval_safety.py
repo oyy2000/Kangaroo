@@ -165,16 +165,21 @@ def get_model_answers(
                 accept_lengths_tree.extend(accept_length_tree)
                 output_ids = output_ids[0][len(input_ids[0]):]
                 
-                midlayer_prediction = []
+                midlayer_predictions = []
                 for token_id in range(len(all_hidden_states)):
                     token_prediction = []
                     token_hidden_states = torch.stack(all_hidden_states[token_id], dim=1)
                     logits = model.head_model(token_hidden_states).float() # batchsize, vocab_size
                     output_token = torch.argmax(logits[:, :, :], dim=-1)
-                    midlayer_prediction.append(output_token[0].cpu().tolist())
-                        
-                import ipdb
-                ipdb.set_trace()
+                    midlayer_predictions.append(output_token[0].cpu().tolist())
+
+
+                transposed_midlayer_predictions = list(zip(*midlayer_predictions))
+                transposed_midlayer_predictions = [list(row) for row in transposed_midlayer_predictions]
+                
+                midlayer_predictions = transposed_midlayer_predictions
+                # import ipdb
+                # ipdb.set_trace()
                 # output_ids : LLM 输出的所有token的 vocab id     -- midlayer_prediction : LLM所有输出token 对应的2-32层分别的预测 vocab id
             except RuntimeError as e:
                 print("ERROR when forwarding question ID: ", question["question_id"])
@@ -221,9 +226,23 @@ def get_model_answers(
         choices.append({"index": i, "turns": turns, "idxs": idxs, "new_tokens": new_tokens, "wall_time": wall_time,
                         "accept_lengths": cur_accept_lengths_tree})
 
+        try:
+            midlayer_tokens = {}
+            for i in range(len(midlayer_predictions)):
+                # Convert each prediction (which is a list of token IDs) to tokens.
+                tokens = tokenizer.convert_ids_to_tokens(midlayer_predictions[i])
+                midlayer_tokens[i] = tokens
+            midlayer_setences = {}
+            for i in range(len(midlayer_predictions)):
+                midlayer_setences[i] = tokenizer.decode(midlayer_predictions[i], spaces_between_special_tokens=False)
+    
+        except RuntimeError as e:
+            print("ERROR when decoding midlayer predictions")
+            midlayer_tokens = "ERROR"
+
         # Dump answers
         os.makedirs(os.path.dirname(answer_file), exist_ok=True)
-        with open(os.path.expanduser(answer_file), "a") as fout:
+        with open(os.path.expanduser(answer_file), "w") as fout:
             ans_json = {
                 "question_id": question["question_id"],
                 "label": question["label"],
@@ -233,7 +252,11 @@ def get_model_answers(
                 "tstamp": time.time(),
                 "res": output,
                 "prompt": q_prompt,
-                "source": question["source"]
+                "source": question["source"],
+                "midlayer_predictions": midlayer_predictions,
+                # "midlayer_predictions_len": len(midlayer_predictions),
+                "midlayer_tokens": midlayer_tokens,
+                "midlayer_setences": midlayer_setences,
             }
             fout.write(json.dumps(ans_json) + "\n")
     print("#Mean accepted tokens: ", np.mean(accept_lengths_tree))
