@@ -15,5 +15,4 @@ CUDA_VISIBLE_DEVICES=2 python -m evaluation.inference_baseline_safety --model-pa
 
 
 # Kangaroo case-study
-
-CUDA_VISIBLE_DEVICES=0 python -m evaluation.kangaroo_safety_casestudy --adapter-path "cache/CKPT/kangaroo-vicuna-7b-v1.3" --exitlayer 2 --model-path "cache/CKPT/vicuna-7b-v1.3" --threshold 0.6 --steps 6 --model-id "kangaroo_casestudy" --bench-name "Kangaroo_safety" --dtype "float16"
+CUDA_VISIBLE_DEVICES=0 python -m evaluation.kangaroo_safety_casestudy --adapter-path "kangaroo-vicuna-7b-v1.3" --exitlayer 2 --model-path "vicuna-7b-v1.3" --threshold 0.6 --steps 6 --model-id "kangaroo_casestudy" --bench-name "Kangaroo_safety" --dtype "float16"
