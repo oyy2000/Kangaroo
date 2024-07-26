@@ -108,6 +108,7 @@ def get_model_answers(
             prompt = conv.get_prompt()
             inputs = tokenizer([prompt], return_tensors="pt").to("cuda")
             input_ids = inputs.input_ids
+            total_time = 0
             try:
                 torch.cuda.synchronize()
                 start_time = time.time()
