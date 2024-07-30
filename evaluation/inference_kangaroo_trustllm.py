@@ -16,6 +16,190 @@ from kangaroo.kangaroo_model import KangarooModel
 from fastchat.model import get_conversation_template
 from tqdm import tqdm
 
+
+def get_nucleus_posterior_mask(logits, candidates, temperature, top_p):
+    """
+    Generates a posterior mask for token candidates using nucleus (top-p) sampling.
+
+    This function applies nucleus sampling to a set of logits, and then generates a mask indicating 
+    which candidate tokens are selected. It adapts the sampling strategy to accommodate for 
+    temperature scaling and cumulative probability thresholding.
+
+    Args:
+        logits (torch.Tensor): A tensor of logits from a language model output.
+        candidates (torch.Tensor): A tensor of candidate tokens to compare against sampled tokens.
+        temperature (float): A parameter to scale the logits, controlling randomness in sampling.
+        top_p (float): The cumulative probability threshold for nucleus sampling.
+
+    Returns:
+        torch.Tensor: A posterior mask indicating which candidate tokens match the sampled tokens.
+    """
+    # adapted from https://github.com/huggingface/transformers/blob/18a879f47576822aa1a5c49aecb27d89bfa5fa69/examples/run_generation.py#L79
+
+    # Apply temperature
+    logits = logits[:, :-1] / temperature
+    n_samples, n_tokens = logits.shape[0], logits.shape[1]
+    logits = logits.view(n_samples*n_tokens, -1)
+    if top_p >= 1:
+        sampled_tokens = torch.multinomial(F.softmax(logits, dim=-1), 1)
+        sampled_tokens = sampled_tokens.view(n_samples, n_tokens)
+        posterior_mask = (candidates[:, 1:] == sampled_tokens).int()
+        return posterior_mask
+    # Convert to probabilities (softmax)
+    probs = F.softmax(logits, dim=-1)
+    # Sort the probabilities
+    sorted_logits, sorted_indices = torch.sort(probs, descending=True)
+
+    # Compute cumulative probabilities
+    cum_probs = torch.cumsum(sorted_logits, dim=-1)
+
+    # Create mask for the top-p nucleus
+    sorted_indices_to_remove = cum_probs > top_p
+    sorted_indices_to_remove[..., 1:] = sorted_indices_to_remove[..., :-1].clone()
+    sorted_indices_to_remove[..., 0] = 0
+
+    indices_to_remove = sorted_indices_to_remove.scatter(dim=1, index=sorted_indices, src=sorted_indices_to_remove)
+
+    
+    # Remove low-probability tokens
+    logits[indices_to_remove] = float('-inf')
+    # Sample from the remaining tokens
+    sampled_tokens = torch.multinomial(F.softmax(logits, dim=-1), 1)
+    sampled_tokens = sampled_tokens.view(n_samples, n_tokens)
+    # Create a mask for selected tokens
+    posterior_mask = (candidates[:, 1:] == sampled_tokens).int()
+
+    return posterior_mask
+
+
+def get_typical_posterior_mask(logits, candidates, temperature, posterior_threshold, posterior_alpha):
+    """
+    Args:
+        logits (torch.Tensor): A tensor of logits from a language model output.
+        candidates (torch.Tensor): A tensor of candidate tokens to compare against sampled tokens.
+        temperature (float): A parameter to scale the logits, controlling randomness in sampling.
+        posterior_threshold (float): The minimum threshold for probabilities to be considered in sampling.
+        posterior_alpha (float): A scaling factor applied to the entropy-based adaptive threshold.
+
+    Returns:
+        torch.Tensor: A posterior mask indicating which candidate tokens match the sampled tokens.
+    """
+    logits = logits[:, :-1] / temperature
+    n_samples, n_tokens = logits.shape[0], logits.shape[1]
+    logits = logits.view(n_samples*n_tokens, -1)
+    probs = F.softmax(logits, dim=-1)
+    entropy = -torch.sum(
+            probs * torch.log(probs + 1e-5), dim=-1
+        )
+    threshold = torch.minimum(
+            torch.ones_like(entropy) * posterior_threshold,
+            torch.exp(-entropy) * posterior_alpha,
+        )
+    indices_to_remove = probs < threshold.unsqueeze(-1)
+    logits[indices_to_remove] = float('-inf')
+    sampled_tokens = torch.multinomial(F.softmax(logits, dim=-1), 1)
+    sampled_tokens = sampled_tokens.view(n_samples, n_tokens)
+    posterior_mask = (candidates[:, 1:] == sampled_tokens).int()
+    return posterior_mask
+    
+
+
+def evaluate_posterior(
+    logits, candidates, temperature, posterior_threshold=0.3, posterior_alpha = 0.09, top_p=0.8, sampling = 'typical', fast = True
+):
+    """
+    Evaluate the posterior probabilities of the candidates based on the provided logits and choose the best candidate.
+
+    Depending on the temperature value, the function either uses greedy decoding or evaluates posterior
+    probabilities to select the best candidate.
+
+    Args:
+    - logits (torch.Tensor): Predicted logits of shape (batch_size, sequence_length, vocab_size).
+    - candidates (torch.Tensor): Candidate token sequences.
+    - temperature (float): Softmax temperature for probability scaling. A value of 0 indicates greedy decoding.
+    - posterior_threshold (float): Threshold for posterior probability.
+    - posterior_alpha (float): Scaling factor for the threshold.
+    - top_p (float, optional): Cumulative probability threshold for nucleus sampling. Defaults to 0.8.
+    - sampling (str, optional): Defines the sampling strategy ('typical' or 'nucleus'). Defaults to 'typical'.
+    - fast (bool, optional): If True, enables faster, deterministic decoding for typical sampling. Defaults to False.
+    Returns:
+    - best_candidate (torch.Tensor): Index of the chosen best candidate.
+    - accept_length (int): Length of the accepted candidate sequence.
+    """
+    # Greedy decoding based on temperature value
+    if temperature == 0:
+        # Find the tokens that match the maximum logits for each position in the sequence
+        posterior_mask = (
+            candidates[:, 1:] == torch.argmax(logits[:, :-1], dim=-1)
+        ).int()
+        candidates_accept_length = (torch.cumprod(posterior_mask, dim=1)).sum(dim=1)
+        accept_length = candidates_accept_length.max()
+        # Choose the best candidate
+        if accept_length == 0:
+            # Default to the first candidate if none are accepted
+            best_candidate = torch.tensor(0, dtype=torch.long, device=candidates.device)
+        else:
+            best_candidate = torch.argmax(candidates_accept_length).to(torch.long)
+        return best_candidate, accept_length
+        
+    if sampling == 'typical':
+        if fast:
+            posterior_prob = torch.softmax(logits[:, :-1] / temperature, dim=-1)
+            candidates_prob = torch.gather(
+                posterior_prob, dim=-1, index=candidates[:, 1:].unsqueeze(-1)
+            ).squeeze(-1)
+            posterior_entropy = -torch.sum(
+                posterior_prob * torch.log(posterior_prob + 1e-5), dim=-1
+            )  # torch.sum(torch.log(*)) is faster than torch.prod
+            threshold = torch.minimum(
+                torch.ones_like(posterior_entropy) * posterior_threshold,
+                torch.exp(-posterior_entropy) * posterior_alpha,
+            )
+            posterior_mask = candidates_prob > threshold
+            candidates_accept_length = (torch.cumprod(posterior_mask, dim=1)).sum(dim=1)
+
+            # Choose the best candidate based on the evaluated posterior probabilities
+            accept_length = candidates_accept_length.max()
+            if accept_length == 0:
+                # If no candidates are accepted, just choose the first one
+                best_candidate = torch.tensor(0, dtype=torch.long, device=candidates.device)
+            else:
+                best_candidates = torch.where(candidates_accept_length == accept_length)[0]
+                # Accept the best one according to likelihood
+                likelihood = torch.sum(
+                    torch.log(candidates_prob[best_candidates, :accept_length]), dim=-1
+                )
+                best_candidate = best_candidates[torch.argmax(likelihood)]
+            return best_candidate, accept_length
+        # Calculate posterior probabilities and thresholds for candidate selection
+        posterior_mask = get_typical_posterior_mask(logits, candidates, temperature, posterior_threshold, posterior_alpha, fast)
+        candidates_accept_length = (torch.cumprod(posterior_mask, dim=1)).sum(dim=1)
+        # Choose the best candidate based on the evaluated posterior probabilities
+        accept_length = candidates_accept_length.max()
+        
+        if accept_length == 0:
+            # If no candidates are accepted, just choose the first one
+            best_candidate = torch.tensor(0, dtype=torch.long, device=candidates.device)
+        else:
+            best_candidate = torch.argmax(candidates_accept_length).to(torch.long)
+            # Accept the best one according to likelihood
+        return best_candidate, accept_length
+    
+    if sampling == 'nucleus':
+        assert top_p < 1.0 + 1e-6, "top_p should between 0 and 1"
+        posterior_mask = get_nucleus_posterior_mask(logits, candidates, temperature, top_p)
+        candidates_accept_length = (torch.cumprod(posterior_mask, dim=1)).sum(dim=1)
+        accept_length = candidates_accept_length.max()
+        # Choose the best candidate
+        if accept_length == 0:
+            # Default to the first candidate if none are accepted
+            best_candidate = torch.tensor(0, dtype=torch.long, device=candidates.device)
+        else:
+            best_candidate = torch.argmax(candidates_accept_length).to(torch.long)
+        return best_candidate, accept_length
+    else:
+        raise NotImplementedError
+
 def save_json(data, file_path):
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
@@ -264,20 +448,40 @@ def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample=False, 
             hidden_state_, hidden_state = model.base_model.forward_draft_or_large_model(in_features_large=exited_hidden_states, position_ids=position_ids)
             
             logits = model.head_model(hidden_state).float() # batchsize, input_length, vocab_size
-            output_tokens = torch.argmax(logits[:, :, :], dim=-1)
+            output_length = end_index - start_index
+            if do_sample:
+                # Generate top-k candidates
+                top_k = 10  # Define the number of top candidates to consider
+                top_probs, top_indices = torch.topk(logits, top_k, dim=-1)
+                candidates = top_indices.squeeze(0)  # Remove batch dimension
 
-            # Verification for greedy decoding
-            output_lenght = end_index - start_index
-            for i in range(output_lenght):
-                if i == output_lenght-1 or output_tokens[0, i] == token_eos or output_tokens[0, i] != global_tokens[0, start_index+1+i]:
-                    global_tokens[0, start_index+1+i] = output_tokens[0, i]
-                    start_index = start_index+1+i
-                    if output_tokens[0, i] == token_eos:
-                        stop = True
-                    break
+                # Evaluate posterior probabilities and choose the best candidate
+                best_candidate, accept_length = evaluate_posterior(
+                    logits.squeeze(0),  # Remove batch dimension
+                    candidates,
+                    temperature,
+                    posterior_threshold=posterior_threshold,
+                    posterior_alpha=posterior_alpha,
+                    top_p=top_p,
+                    sampling=sampling
+                )
+                global_tokens[:, end_index] = best_candidate
+            else:
+            
+            # output_tokens = torch.argmax(logits[:, :, :], dim=-1)
+
+            # # Verification for greedy decoding
+            # output_lenght = end_index - start_index
+            # for i in range(output_lenght):
+            #     if i == output_lenght-1 or output_tokens[0, i] == token_eos or output_tokens[0, i] != global_tokens[0, start_index+1+i]:
+            #         global_tokens[0, start_index+1+i] = output_tokens[0, i]
+            #         start_index = start_index+1+i
+            #         if output_tokens[0, i] == token_eos:
+            #             stop = True
+            #         break
 
             accept_length_list.append(start_index - start_index_copy)
-            hidden_state = hidden_state[:, :output_lenght-(end_index-start_index), :]
+            hidden_state = hidden_state[:, :output_length-(end_index-start_index), :]
 
             # STEP 4: Post process KV-cache
             if model.base_model.past_key_values[0][0].shape[2] > start_index:
