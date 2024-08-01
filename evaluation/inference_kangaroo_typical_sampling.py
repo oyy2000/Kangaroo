@@ -16,6 +16,37 @@ from kangaroo.kangaroo_model import KangarooModel
 from fastchat.model import get_conversation_template
 from tqdm import tqdm
 
+def apply_typical_acceptance(logits, candidates, temperature, posterior_threshold, posterior_alpha):
+    posterior_prob = torch.softmax(logits[:, :-1] / temperature, dim=-1)
+    candidates_prob = torch.gather(
+        posterior_prob, dim=-1, index=candidates[:, 1:].unsqueeze(-1)
+    ).squeeze(-1)
+    posterior_entropy = -torch.sum(
+        posterior_prob * torch.log(posterior_prob + 1e-5), dim=-1
+    )  # torch.sum(torch.log(*)) is faster than torch.prod
+    threshold = torch.minimum(
+        torch.ones_like(posterior_entropy) * posterior_threshold,
+        torch.exp(-posterior_entropy) * posterior_alpha,
+    )
+    posterior_mask = candidates_prob > threshold
+    candidates_accept_length = (torch.cumprod(posterior_mask, dim=1)).sum(dim=1)
+
+    # Choose the best candidate based on the evaluated posterior probabilities
+    accept_length = candidates_accept_length.max()
+    # transfer tensor accept_length to int
+    accept_length = accept_length.item()
+    if accept_length == 0:
+        # If no candidates are accepted, just choose the first one
+        best_candidate = torch.tensor(0, dtype=torch.long, device=candidates.device)
+    else:
+        best_candidates = torch.where(candidates_accept_length == accept_length)[0]
+        # Accept the best one according to likelihood
+        likelihood = torch.sum(
+            torch.log(candidates_prob[best_candidates, :accept_length]), dim=-1
+        )
+        best_candidate = best_candidates[torch.argmax(likelihood)]
+    return best_candidate, accept_length
+
 def save_json(data, file_path):
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
@@ -265,19 +296,24 @@ def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample=False, 
             
             logits = model.head_model(hidden_state).float() # batchsize, input_length, vocab_size
             output_tokens = torch.argmax(logits[:, :, :], dim=-1)
+            output_length = end_index - start_index
 
-            # Verification for greedy decoding
-            output_lenght = end_index - start_index
-            for i in range(output_lenght):
-                if i == output_lenght-1 or output_tokens[0, i] == token_eos or output_tokens[0, i] != global_tokens[0, start_index+1+i]:
-                    global_tokens[0, start_index+1+i] = output_tokens[0, i]
-                    start_index = start_index+1+i
-                    if output_tokens[0, i] == token_eos:
-                        stop = True
-                    break
+            candidates = global_tokens[:, start_index: end_index]
+            if do_sample:
+                _best_candidates, accept_length = apply_typical_acceptance(logits, candidates, temperature=1.0, posterior_threshold=0.1, posterior_alpha=1.0)
+                start_index += accept_length + 1
+            else:
+                for i in range(output_length):
+                    if i == output_length - 1 or output_tokens[0, i] == token_eos or output_tokens[0, i] != global_tokens[0, start_index + 1 + i]:
+                        global_tokens[0, start_index + 1 + i] = output_tokens[0, i]
+                        start_index = start_index + 1 + i
+                        if output_tokens[0, i] == token_eos:
+                            stop = True
+                        break
+                    
 
             accept_length_list.append(start_index - start_index_copy)
-            hidden_state = hidden_state[:, :output_lenght-(end_index-start_index), :]
+            hidden_state = hidden_state[:, :output_length-(end_index-start_index), :]
 
             # STEP 4: Post process KV-cache
             if model.base_model.past_key_values[0][0].shape[2] > start_index:
