@@ -366,7 +366,21 @@ def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample="typica
                 for i in range(output_length):
                     if output_tokens[0, i] == token_eos:
                             stop = True
-            
+                        
+            elif do_sample == "topk":
+                # Verification for top-k sampling
+                hyper_k = 3  # Top-k parameter please specify the parameter in arguments.
+                output_topk_tokens = torch.topk(logits,k=hyper_k,dim=-1).indices
+    
+                output_lenght = end_index - start_index
+                for i in range(output_lenght):
+         
+                    if i == output_lenght-1 or output_tokens[0, i] == token_eos or global_tokens[0, start_index+1+i] not in output_topk_tokens[0, i, :]:
+                        global_tokens[0, start_index+1+i] = output_tokens[0, i]
+                        start_index = start_index+1+i
+                        if output_tokens[0, i] == token_eos:
+                            stop = True
+                        break
             else:
                 for i in range(output_length):
                     if i == output_length - 1 or output_tokens[0, i] == token_eos or output_tokens[0, i] != global_tokens[0, start_index + 1 + i]:
