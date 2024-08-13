@@ -47,6 +47,38 @@ def apply_typical_acceptance(logits, candidates, temperature, posterior_threshol
         best_candidate = best_candidates[torch.argmax(likelihood)]
     return best_candidate, accept_length
 
+
+def apply_typical_acceptance_test(logits, candidates, temperature, posterior_threshold, posterior_alpha):
+    posterior_prob = torch.softmax(logits[:, :] / temperature, dim=-1)
+    candidates_prob = torch.gather(
+        posterior_prob, dim=-1, index=candidates[:, :].unsqueeze(-1)
+    ).squeeze(-1)
+    posterior_entropy = -torch.sum(
+        posterior_prob * torch.log(posterior_prob + 1e-5), dim=-1
+    )  # torch.sum(torch.log(*)) is faster than torch.prod
+    threshold = torch.minimum(
+        torch.ones_like(posterior_entropy) * posterior_threshold,
+        torch.exp(-posterior_entropy) * posterior_alpha,
+    )
+    posterior_mask = candidates_prob > threshold
+    candidates_accept_length = (torch.cumprod(posterior_mask, dim=1)).sum(dim=1)
+
+    # Choose the best candidate based on the evaluated posterior probabilities
+    accept_length = candidates_accept_length.max()
+    # transfer tensor accept_length to int
+    accept_length = accept_length.item()
+    if accept_length == 0:
+        # If no candidates are accepted, just choose the first one
+        best_candidate = torch.tensor(0, dtype=torch.long, device=candidates.device)
+    else:
+        best_candidates = torch.where(candidates_accept_length == accept_length)[0]
+        # Accept the best one according to likelihood
+        likelihood = torch.sum(
+            torch.log(candidates_prob[best_candidates, :accept_length]), dim=-1
+        )
+        best_candidate = best_candidates[torch.argmax(likelihood)]
+    return best_candidate, accept_length
+
 def save_json(data, file_path):
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
@@ -200,11 +232,13 @@ def get_model_answers(
             question['res'] = output
             question['accept_lengths'] = cur_accept_lengths_tree
             question['wall_time'] = total_time
+            wall_time_list.append(total_time)
             save_json(questions, answer_file)
         else:
+            # print("Skip question: ", question["prompt"])
             accept_lengths_tree.extend(question['accept_lengths'])
             # compute the average wall time of all questions
-        wall_time_list.append(total_time)
+            wall_time_list.append(question['wall_time'])
     
     print("#Mean wall time: ", np.mean(wall_time_list))
     print("#Mean accepted tokens: ", np.mean(accept_lengths_tree))
@@ -218,7 +252,7 @@ def get_model_answers(
         f.write(f"Mean accepted tokens: {np.mean(accept_lengths_tree)}\n")    
 
 
-def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample=False, max_length = 2048, EARLY_STOP_LAYER = 2, SPECULATIVE_DECODING_STEPS = 6, threshold = 0.6):
+def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample="typical", max_length = 2048, EARLY_STOP_LAYER = 2, SPECULATIVE_DECODING_STEPS = 6, temperature = 0.7, threshold = 0.6):
     context_tokens = inputs.input_ids
     device = context_tokens.device
     token_eos = tokenizer.eos_token_id
@@ -298,10 +332,41 @@ def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample=False, 
             output_tokens = torch.argmax(logits[:, :, :], dim=-1)
             output_length = end_index - start_index
 
-            candidates = global_tokens[:, start_index: end_index]
-            if do_sample:
-                _best_candidates, accept_length = apply_typical_acceptance(logits, candidates, temperature=1.0, posterior_threshold=0.1, posterior_alpha=1.0)
+            posterior_threshold = 0.3
+            posterior_alpha = 0.09
+
+            if do_sample == "typical":
+                for i in range(output_length):
+                    if i == output_length - 1 or output_tokens[0, i] == token_eos or output_tokens[0, i] != global_tokens[0, start_index + 1 + i]:
+                        # apply typical acceptance here
+                        posterior_prob = torch.softmax(logits[:, i, :] / 1.0, dim=-1)
+                        posterior_entropy = -torch.sum(
+                            posterior_prob * torch.log(posterior_prob + 1e-5), dim=-1
+                        )  # torch.sum(torch.log(*)) is faster than torch.prod
+                        threshold = torch.minimum(
+                            torch.ones_like(posterior_entropy) * posterior_threshold,
+                            torch.exp(-posterior_entropy) * posterior_alpha,
+                        )
+                        is_accepted = posterior_prob.max(dim=-1).values > threshold
+                        if is_accepted:
+                            start_index += 1
+                        else:
+                            start_index += 1
+                            stop = True
+                        if output_tokens[0, i] == token_eos:
+                            stop = True
+                        if stop or start_index >= max_infer_steps:
+                            break
+
+            elif do_sample == "typical_test": 
+                candidates = global_tokens[:, start_index: end_index]
+                # posterior_threshold=0.3, posterior_alpha = 0.09, top_p=0.8
+                _best_candidates, accept_length = apply_typical_acceptance_test(logits, candidates, temperature, posterior_threshold, posterior_alpha)
                 start_index += accept_length + 1
+                for i in range(output_length):
+                    if output_tokens[0, i] == token_eos:
+                            stop = True
+            
             else:
                 for i in range(output_length):
                     if i == output_length - 1 or output_tokens[0, i] == token_eos or output_tokens[0, i] != global_tokens[0, start_index + 1 + i]:
@@ -381,16 +446,23 @@ if __name__ == "__main__":
         "--num-gpus-total", type=int, default=1, help="The total number of GPUs."
     )
     parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.7,
+        help="The temperature for sampling.",
+    )
+    parser.add_argument(
         "--threshold",
         type=float,
-        default=0.4,
-        help="The temperature for medusa sampling.",
+        default=0.6,
+        help="The threshold for fallback.",
     )
+
     parser.add_argument(
         "--exitlayer",
         type=int,
         default=2,
-        help="The temperature for medusa sampling.",
+        help="The exitlayer.",
     )
     parser.add_argument(
         "--steps",
@@ -419,13 +491,18 @@ if __name__ == "__main__":
         required=True,
     )
 
+    parser.add_argument(
+        "--do_sample",
+        type=str,
+        required=True,
+    )
+
     args = parser.parse_args()
     
     question_file = f"data/eval_data/{args.task}/{args.subtask}.json"
 
     model = KangarooModel(args.model_path, args.adapter_path, args, EARLY_STOP_LAYER = args.exitlayer)
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
-    do_sample = True
 
     answer_file_dir = f"data/{args.bench_name}/{args.model_id}/{args.task}"
     os.makedirs(answer_file_dir, exist_ok=True)
@@ -445,8 +522,8 @@ if __name__ == "__main__":
         num_choices=args.num_choices,
         num_gpus_per_model=args.num_gpus_per_model,
         num_gpus_total=args.num_gpus_total,
-        do_sample=do_sample,
-        threshold=args.threshold,
+        do_sample=args.do_sample,
+        temperature=args.temperature,
         SPECULATIVE_DECODING_STEPS=args.steps,
         EARLY_STOP_LAYER=args.exitlayer
     )
