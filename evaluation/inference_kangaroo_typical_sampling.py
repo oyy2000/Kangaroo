@@ -366,21 +366,59 @@ def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample="typica
                 for i in range(output_length):
                     if output_tokens[0, i] == token_eos:
                             stop = True
-                        
+            elif do_sample == "typical_t":
+                for i in range(output_length):
+                    if i == output_length - 1 or output_tokens[0, i] == token_eos or output_tokens[0, i] != global_tokens[0, start_index + 1 + i]:
+                        # apply typical acceptance here
+                        posterior_prob = torch.softmax(logits[:, i, :] / 1.0, dim=-1)
+                        posterior_entropy = -torch.sum(
+                            posterior_prob * torch.log(posterior_prob + 1e-5), dim=-1
+                        )  # torch.sum(torch.log(*)) is faster than torch.prod
+                        threshold = torch.minimum(
+                            torch.ones_like(posterior_entropy) * posterior_threshold,
+                            torch.exp(-posterior_entropy) * posterior_alpha,
+                        )
+                        is_accepted = posterior_prob.max(dim=-1).values > threshold
+                        if is_accepted:
+                            start_index += 1
+                        else:
+                            start_index += 1
+                            stop = True
+                        if output_tokens[0, i] == token_eos:
+                            stop = True
+                        if stop or start_index >= max_infer_steps:
+                            break
+
+            elif do_sample == "top_p":
+                # Verification for top-p sampling
+                hyper_p = 0.8
+                output_top_p_tokens = torch.topk(logits,k=hyper_p,dim=-1).indices
+                
+                output_lenght = end_index - start_index
+                for i in range(output_lenght):
+
+                    if i == output_lenght-1 or output_tokens[0, i] == token_eos or global_tokens[0, start_index+1+i] not in output_top_p_tokens[0, i, :]:
+                        global_tokens[0, start_index+1+i] = output_tokens[0, i]
+                        start_index = start_index+1+i
+                        if output_tokens[0, i] == token_eos:
+                            stop = True
+                        break
+
             elif do_sample == "topk":
                 # Verification for top-k sampling
-                hyper_k = 3  # Top-k parameter please specify the parameter in arguments.
-                output_topk_tokens = torch.topk(logits,k=hyper_k,dim=-1).indices
-    
-                output_lenght = end_index - start_index
-                for i in range(output_lenght):
-         
-                    if i == output_lenght-1 or output_tokens[0, i] == token_eos or global_tokens[0, start_index+1+i] not in output_topk_tokens[0, i, :]:
-                        global_tokens[0, start_index+1+i] = output_tokens[0, i]
-                        start_index = start_index+1+i
-                        if output_tokens[0, i] == token_eos:
-                            stop = True
-                        break
+                hyper_k = 3  # Top-k parameter please specify the parameter in arguments.
+                output_topk_tokens = torch.topk(logits,k=hyper_k,dim=-1).indices
+
+                output_lenght = end_index - start_index
+                for i in range(output_lenght):
+
+                    if i == output_lenght-1 or output_tokens[0, i] == token_eos or global_tokens[0, start_index+1+i] not in output_topk_tokens[0, i, :]:
+                        global_tokens[0, start_index+1+i] = output_tokens[0, i]
+                        start_index = start_index+1+i
+                        if output_tokens[0, i] == token_eos:
+                            stop = True
+                        break
+            
             else:
                 for i in range(output_length):
                     if i == output_length - 1 or output_tokens[0, i] == token_eos or output_tokens[0, i] != global_tokens[0, start_index + 1 + i]:
