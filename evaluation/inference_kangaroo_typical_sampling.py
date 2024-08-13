@@ -253,28 +253,31 @@ def get_model_answers(
 
 
 def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample="typical", max_length = 2048, EARLY_STOP_LAYER = 2, SPECULATIVE_DECODING_STEPS = 6, temperature = 0.7, threshold = 0.6):
-    context_tokens = inputs.input_ids
-    device = context_tokens.device
-    token_eos = tokenizer.eos_token_id
-    batch_size, context_length = context_tokens.shape
-    global_tokens = torch.ones((batch_size, max_length), dtype=torch.long, device=device) * token_eos
-    global_position_ids = torch.LongTensor([[i for i in range(max_length)]]).to(device)
-    accept_length_list = [1]
+    context_tokens = inputs.input_ids # 把prompt转换成token
+    device = context_tokens.device 
+    token_eos = tokenizer.eos_token_id # 1
+    batch_size, context_length = context_tokens.shape # batchsize, input_length
+    global_tokens = torch.ones((batch_size, max_length), dtype=torch.long, device=device) * token_eos # 生成一个全是1的tensor，大小为batchsize, max_length
+    global_position_ids = torch.LongTensor([[i for i in range(max_length)]]).to(device) # 生成一个从0到max_length的tensor，作为position_ids 
+    accept_length_list = [1] # 生成一个长度为1的list，值为1
 
-    start_index = context_length
-    global_tokens[:, :start_index] = context_tokens
+    start_index = context_length # 从context_length开始，也就是 prompt的下一个token
+    global_tokens[:, :start_index] = context_tokens # 把prompt的token放到global_tokens的前面， : 是一个左闭右开的区间，所以不包含start_index
 
     # Init KV-chache and sample the first token
     with torch.no_grad():
-        position_ids = global_position_ids[:, :start_index]
-        output = model.base_model(context_tokens, position_ids=position_ids, output_hidden_states=True)
-        model.base_model.past_key_values = list(output.past_key_values)
-        hidden_state = output.hidden_states[-1]
-        logits = output.logits # batchsize, input_length, vocab_size
-        global_tokens[:, start_index] = torch.argmax(logits[:, -1, :], dim=-1).item()
-        hidden_state_early = output.hidden_states[EARLY_STOP_LAYER]
+        position_ids = global_position_ids[:, :start_index] # 给 context_tokens 生成一个position_ids
 
-        # KV-cache for the adapter
+        # 把context_tokens和position_ids输入到base_model中
+        output = model.base_model(context_tokens, position_ids=position_ids, output_hidden_states=True) # output是一个tuple，包含了last_hidden_state, past_key_values, hidden_states
+        model.base_model.past_key_values = list(output.past_key_values) # KV-cache, 用于存储每一层的key和value
+        hidden_state = output.hidden_states[-1] # hidden_state是最后一层的hidden_state
+        logits = output.logits # batchsize, input_length, vocab_size
+        global_tokens[:, start_index] = torch.argmax(logits[:, -1, :], dim=-1).item() # 把预测的token放到global_tokens的start_index位置，也就是context_tokens的下一个位置
+        hidden_state_early = output.hidden_states[EARLY_STOP_LAYER] # early stopping layer, 用于提前停止的层， 第二层
+
+        # KV-cache for the adapter 
+        # 已经有了base_model的KV-cache，现在需要为adapter_model生成KV-cache
         hidden_state, adapter_past_key_values = model.adapter_model.forward_early_stop(inputs_embeds=hidden_state_early[:,:,:], position_ids=global_position_ids[:, :context_length], use_cache=True) 
 
     total_inference_steps = 0
@@ -282,10 +285,10 @@ def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample="typica
     with torch.no_grad():
         max_infer_steps = min(max_length, start_index + max_new_tokens)
         stop = False
-
+        # 使用draft model 进行快速推理
         while start_index < max_infer_steps - 1 - SPECULATIVE_DECODING_STEPS:
 
-            start_index_copy = start_index
+            start_index_copy = start_index # 保存start_index的值
             end_index = start_index + 1
             
             # STEP 1: Small model decoding
@@ -392,7 +395,7 @@ def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample="typica
             elif do_sample == "top_p":
                 # Verification for top-p sampling
                 hyper_p = 0.8
-                output_top_p_tokens = torch.topk(logits,k=hyper_p,dim=-1).indices
+                output_top_p_tokens = torch.top_p(logits,k=hyper_p,dim=-1).indices
                 
                 output_lenght = end_index - start_index
                 for i in range(output_lenght):
