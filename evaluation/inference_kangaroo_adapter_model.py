@@ -191,224 +191,170 @@ def get_model_answers(
         f.write(f"Mean accepted tokens: {np.mean(accept_lengths_tree)}\n")    
 
 
+# def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample="typical", max_length = 2048, EARLY_STOP_LAYER = 2, SPECULATIVE_DECODING_STEPS = 6, temperature = 0.7, threshold = 0.6, hyper_k = 2, hyper_p = 0.8, epsilon = 0.3, delta = 0.09):
+#     context_tokens = inputs.input_ids # 把prompt转换成token
+#     device = context_tokens.device 
+#     token_eos = tokenizer.eos_token_id # 1
+#     batch_size, context_length = context_tokens.shape # batchsize, input_length
+#     global_tokens = torch.ones((batch_size, max_length), dtype=torch.long, device=device) * token_eos # 生成一个全是1的tensor，大小为batchsize, max_length
+#     global_position_ids = torch.LongTensor([[i for i in range(max_length)]]).to(device) # 生成一个从0到max_length的tensor，作为position_ids 
+#     accept_length_list = [1] # 生成一个长度为1的list，值为1
+
+#     start_index = context_length # 从context_length开始，也就是 prompt的下一个token
+#     global_tokens[:, :start_index] = context_tokens # 把prompt的token放到global_tokens的前面， : 是一个左闭右开的区间，所以不包含start_index
+
+#     # Init KV-chache and sample the first token
+#     with torch.no_grad():
+#         position_ids = global_position_ids[:, :start_index] # 给 context_tokens 生成一个position_ids
+
+#         # 把context_tokens和position_ids输入到base_model中
+#         output = model.base_model(context_tokens, position_ids=position_ids, output_hidden_states=True) # output是一个tuple，包含了last_hidden_state, past_key_values, hidden_states
+#         model.base_model.past_key_values = list(output.past_key_values) # KV-cache, 用于存储每一层的key和value
+#         hidden_state = output.hidden_states[-1] # hidden_state是最后一层的hidden_state
+#         logits = output.logits # batchsize, input_length, vocab_size
+#         global_tokens[:, start_index] = torch.argmax(logits[:, -1, :], dim=-1).item() # 把预测的token放到global_tokens的start_index位置，也就是context_tokens的下一个位置
+#         hidden_state_early = output.hidden_states[EARLY_STOP_LAYER] # early stopping layer, 用于提前停止的层， 第二层
+
+#         # KV-cache for the adapter 
+#         # 已经有了base_model的KV-cache，现在需要为adapter_model生成KV-cache
+#         hidden_state, adapter_past_key_values = model.adapter_model.forward_early_stop(inputs_embeds=hidden_state_early[:,:,:], position_ids=global_position_ids[:, :context_length], use_cache=True) 
+
+
+#     with torch.no_grad():
+#         max_infer_steps = min(max_length, start_index + max_new_tokens)
+#         # 使用draft model 进行快速推理
+#         while start_index < max_infer_steps - 1 - SPECULATIVE_DECODING_STEPS:
+#             start_index_copy = start_index # 保存start_index的值
+#             end_index = start_index + 1
+            
+#             # STEP 1: Small model decoding
+#             # for step in range(1 + SPECULATIVE_DECODING_STEPS):
+#             assert adapter_past_key_values[0][0].shape[2] <= end_index-1, "{} - {}".format(adapter_past_key_values[0][0].shape, end_index-1)
+#             in_tokens_small = global_tokens[:, end_index-1:end_index]
+#             if adapter_past_key_values[0][0].shape[2] < end_index-1: # 如果KV-cache的长度小于end_index-1, 也就是所有的draft token都被接受了
+#                 # As illustrated in the framework of Kangaroo, once all drafted tokens are accepted, the KV-cache of the last draft token for the adapter is missing.
+#                 position_ids = global_position_ids[:, start_index-1:end_index]
+#                 hidden_state_early_last = exited_hidden_states[:,-1:,:]
+#             else: # 如果KV-cache的长度等于end_index-1，也就是还有draft token没有被接受
+#                 position_ids = global_position_ids[:, end_index-1:end_index]
+#                 hidden_state_early_last = None
+            
+#             hidden_state_early = model.base_model.forward_draft_or_large_model(in_tokens_small=in_tokens_small[:,-1:], position_ids=position_ids[:,-1:])
+            
+#             # if step==0:
+#                 # exited_hidden_states = None
+#             exited_hidden_states = None
+#             exited_hidden_states = hidden_state_early if exited_hidden_states is None else torch.cat([exited_hidden_states, hidden_state_early], dim = 1)
+            
+#             if hidden_state_early_last is not None:
+#                 hidden_state_early = torch.cat([hidden_state_early_last, hidden_state_early], dim = 1)
+
+#             # early exiting 
+#             # if step == SPECULATIVE_DECODING_STEPS or (step > 0 and predict_score < threshold):
+#             #     break
+
+#             hidden_state, adapter_past_key_values = model.adapter_model.forward_early_stop(inputs_embeds=hidden_state_early, position_ids=position_ids, past_key_values=adapter_past_key_values, use_cache=True)
+
+#             predict_logits = model.head_model(hidden_state[:,-1:,:]).float() 
+#             global_tokens[:, end_index] = torch.argmax(predict_logits[:, -1, :], dim=-1)
+            
+
+#             end_index += 1
+#             if global_tokens[:, start_index].item() == token_eos:
+#                 break
+
+#     output_ids = global_tokens[0, :start_index+1].tolist()
+#     new_token = start_index - context_length + 1
+#     idx = len(accept_length_list) - 1
+#     return [output_ids], new_token, idx, accept_length_list
+
 def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample="typical", max_length = 2048, EARLY_STOP_LAYER = 2, SPECULATIVE_DECODING_STEPS = 6, temperature = 0.7, threshold = 0.6, hyper_k = 2, hyper_p = 0.8, epsilon = 0.3, delta = 0.09):
-    context_tokens = inputs.input_ids # 把prompt转换成token
-    device = context_tokens.device 
-    token_eos = tokenizer.eos_token_id # 1
-    batch_size, context_length = context_tokens.shape # batchsize, input_length
-    global_tokens = torch.ones((batch_size, max_length), dtype=torch.long, device=device) * token_eos # 生成一个全是1的tensor，大小为batchsize, max_length
-    global_position_ids = torch.LongTensor([[i for i in range(max_length)]]).to(device) # 生成一个从0到max_length的tensor，作为position_ids 
-    accept_length_list = [1] # 生成一个长度为1的list，值为1
+# def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, max_length=2048, EARLY_STOP_LAYER=2, SPECULATIVE_DECODING_STEPS=6):
+    context_tokens = inputs.input_ids  # Convert prompt to tokens
+    device = context_tokens.device
+    token_eos = tokenizer.eos_token_id  # EOS token ID
+    batch_size, context_length = context_tokens.shape  # Batch size and input length
+    global_tokens = torch.ones((batch_size, max_length), dtype=torch.long, device=device) * token_eos  # Initialize token buffer
+    global_position_ids = torch.arange(max_length).unsqueeze(0).to(device)  # Position IDs
+    accept_length_list = [1]  # Track accepted token lengths
+    accept_token_list = []  # Track accepted tokens
 
-    start_index = context_length # 从context_length开始，也就是 prompt的下一个token
-    global_tokens[:, :start_index] = context_tokens # 把prompt的token放到global_tokens的前面， : 是一个左闭右开的区间，所以不包含start_index
+    start_index = context_length  # Start from the end of the context
+    global_tokens[:, :start_index] = context_tokens  # Copy context tokens to buffer
 
-    # Init KV-chache and sample the first token
+    # Init KV-cache and sample the first token
     with torch.no_grad():
-        position_ids = global_position_ids[:, :start_index] # 给 context_tokens 生成一个position_ids
+        position_ids = global_position_ids[:, :start_index]  # Position IDs for context tokens
 
-        # 把context_tokens和position_ids输入到base_model中
-        output = model.base_model(context_tokens, position_ids=position_ids, output_hidden_states=True) # output是一个tuple，包含了last_hidden_state, past_key_values, hidden_states
-        model.base_model.past_key_values = list(output.past_key_values) # KV-cache, 用于存储每一层的key和value
-        hidden_state = output.hidden_states[-1] # hidden_state是最后一层的hidden_state
-        logits = output.logits # batchsize, input_length, vocab_size
-        global_tokens[:, start_index] = torch.argmax(logits[:, -1, :], dim=-1).item() # 把预测的token放到global_tokens的start_index位置，也就是context_tokens的下一个位置
-        hidden_state_early = output.hidden_states[EARLY_STOP_LAYER] # early stopping layer, 用于提前停止的层， 第二层
+        # Forward pass through the base model (first two layers)
+        output = model.base_model(context_tokens, position_ids=position_ids, output_hidden_states=True)
+        model.base_model.past_key_values = list(output.past_key_values)
+        hidden_state_early = output.hidden_states[EARLY_STOP_LAYER]  # Hidden state from the second layer
 
-        # KV-cache for the adapter 
-        # 已经有了base_model的KV-cache，现在需要为adapter_model生成KV-cache
-        hidden_state, adapter_past_key_values = model.adapter_model.forward_early_stop(inputs_embeds=hidden_state_early[:,:,:], position_ids=global_position_ids[:, :context_length], use_cache=True) 
+        # Forward pass through the adapter model
+        hidden_state, adapter_past_key_values = model.adapter_model.forward_early_stop(
+            inputs_embeds=hidden_state_early[:, :, :],
+            position_ids=global_position_ids[:, :context_length],
+            use_cache=True
+        )
 
-    total_inference_steps = 0
+        logits = output.logits
+        global_tokens[:, start_index] = torch.argmax(logits[:, -1, :], dim=-1).item()  # Predict next token
 
     with torch.no_grad():
         max_infer_steps = min(max_length, start_index + max_new_tokens)
-        stop = False
-        # 使用draft model 进行快速推理
         while start_index < max_infer_steps - 1 - SPECULATIVE_DECODING_STEPS:
-
-            start_index_copy = start_index # 保存start_index的值
             end_index = start_index + 1
-            
-            # STEP 1: Small model decoding
-            for step in range(1 + SPECULATIVE_DECODING_STEPS):
-                assert adapter_past_key_values[0][0].shape[2] <= end_index-1, "{} - {}".format(adapter_past_key_values[0][0].shape, end_index-1)
-                in_tokens_small = global_tokens[:, end_index-1:end_index]
-                if adapter_past_key_values[0][0].shape[2] < end_index-1: # 如果KV-cache的长度小于end_index-1, 也就是所有的draft token都被接受了
-                    # As illustrated in the framework of Kangaroo, once all drafted tokens are accepted, the KV-cache of the last draft token for the adapter is missing.
-                    position_ids = global_position_ids[:, start_index-1:end_index]
-                    hidden_state_early_last = exited_hidden_states[:,-1:,:]
-                else: # 如果KV-cache的长度等于end_index-1，也就是还有draft token没有被接受
-                    position_ids = global_position_ids[:, end_index-1:end_index]
-                    hidden_state_early_last = None
-                
-                hidden_state_early = model.base_model.forward_draft_or_large_model(in_tokens_small=in_tokens_small[:,-1:], position_ids=position_ids[:,-1:])
-                
-                if step==0:
-                    exited_hidden_states = None
 
-                exited_hidden_states = hidden_state_early if exited_hidden_states is None else torch.cat([exited_hidden_states, hidden_state_early], dim = 1)
-                
-                if hidden_state_early_last is not None:
-                    hidden_state_early = torch.cat([hidden_state_early_last, hidden_state_early], dim = 1)
+            # Ensure end_index is within bounds
+            if end_index >= global_tokens.shape[1]:
+                end_index = global_tokens.shape[1] - 1
 
-                # early exiting 
-                if step == SPECULATIVE_DECODING_STEPS or (step > 0 and predict_score < threshold):
-                    break
+            in_tokens_small = global_tokens[:, end_index-1:end_index]
 
-                hidden_state, adapter_past_key_values = model.adapter_model.forward_early_stop(inputs_embeds=hidden_state_early, position_ids=position_ids, past_key_values=adapter_past_key_values, use_cache=True)
+            # Get hidden state from the second layer of the base model
+            hidden_state_early = model.base_model.forward_draft_or_large_model(
+                in_tokens_small=in_tokens_small[:, -1:],
+                position_ids=global_position_ids[:, end_index-1:end_index]
+            )
 
-                predict_logits = model.head_model(hidden_state[:,-1:,:]).float() 
-                global_tokens[:, end_index] = torch.argmax(predict_logits[:, -1, :], dim=-1)
-                
-                end_index += 1
-                predict_score = predict_logits.softmax(dim=-1).max().item()
+            hidden_state, adapter_past_key_values = model.adapter_model.forward_early_stop(
+                inputs_embeds=hidden_state_early,
+                position_ids=global_position_ids[:, end_index-1:end_index],
+                past_key_values=adapter_past_key_values,
+                use_cache=True
+            )
 
-            # STEP2: Big model inference
-            position_ids = global_position_ids[:, start_index:end_index]
-            assert model.base_model.past_key_values[EARLY_STOP_LAYER][0].shape[2] == start_index, "{} - {}".format(model.base_model.past_key_values[EARLY_STOP_LAYER][0].shape, start_index)
-            assert exited_hidden_states.shape[1] == position_ids.shape[1]
-            hidden_state_, hidden_state = model.base_model.forward_draft_or_large_model(in_features_large=exited_hidden_states, position_ids=position_ids)
-            
-            logits = model.head_model(hidden_state).float() # batchsize, input_length, vocab_size
-            output_tokens = torch.argmax(logits[:, :, :], dim=-1) # batchsize, input_length
-            output_length = end_index - start_index
+            predict_logits = model.head_model(hidden_state[:, -1:, :]).float()
+            next_token = torch.argmax(predict_logits[:, -1, :], dim=-1)
+            global_tokens[:, end_index] = next_token
 
-            posterior_threshold = epsilon # 0.3
-            posterior_alpha = delta # 0.09
-            
-            if do_sample == "typical":
-                for i in range(output_length):
-                    if i == output_length - 1 or output_tokens[0, i] == token_eos or output_tokens[0, i] != global_tokens[0, start_index + 1 + i]:
-                        # apply typical acceptance here
-                        posterior_prob = torch.softmax(logits[:, i, :] / temperature, dim=-1)
-                        posterior_entropy = -torch.sum(
-                            posterior_prob * torch.log(posterior_prob + 1e-5), dim=-1
-                        )  # torch.sum(torch.log(*)) is faster than torch.prod
-                        threshold = torch.minimum(
-                            torch.ones_like(posterior_entropy) * posterior_threshold,
-                            torch.exp(-posterior_entropy) * posterior_alpha,
-                        )
-                        is_accepted = posterior_prob.max(dim=-1).values > threshold
-                        if is_accepted:
-                            start_index += 1
-                        else:
-                            start_index += 1
-                            stop = True
-                        if output_tokens[0, i] == token_eos:
-                            stop = True
-                        if stop or start_index >= max_infer_steps:
-                            break
-
-            elif do_sample == "typical_sampling":
-                for i in range(output_length):
-                    # Calculate posterior probabilities
-                    posterior_prob = torch.softmax(logits[:, i, :] / temperature, dim=-1)
-                    
-                    # Calculate the entropy of the distribution
-                    posterior_entropy = -torch.sum(posterior_prob * torch.log(posterior_prob + 1e-5), dim=-1)
-                    
-                    # Sort probabilities and calculate cumulative probabilities
-                    sorted_prob, sorted_indices = torch.sort(posterior_prob, descending=True)
-                    cumulative_probs = torch.cumsum(sorted_prob, dim=-1)
-                    
-                    # Find the smallest k such that the cumulative probability exceeds the threshold
-                    threshold = torch.minimum(
-                        torch.ones_like(posterior_entropy) * posterior_threshold,
-                        torch.exp(-posterior_entropy) * posterior_alpha,
-                    )
-                    cutoff_index = torch.sum(cumulative_probs < threshold.unsqueeze(-1), dim=-1)
-                    
-                    # Mask the logits for tokens beyond the cutoff
-                    mask = torch.ones_like(posterior_prob)
-                    for batch_idx in range(mask.size(0)):
-                        mask[batch_idx, cutoff_index[batch_idx]:] = 0
-                    
-                    # Re-normalize the probabilities
-                    filtered_prob = posterior_prob * mask
-                    filtered_prob = filtered_prob / filtered_prob.sum(dim=-1, keepdim=True)
-                    
-                    # Sample from the filtered distribution
-                    sampled_index = torch.multinomial(filtered_prob, 1).squeeze(-1)
-                    
-                    # Set the selected token in global_tokens
-                    global_tokens[0, start_index + 1 + i] = sorted_indices[0, sampled_index]
-                    start_index = start_index + 1 + i
-                    
-                    # Check for end-of-sequence token
-                    if global_tokens[0, start_index] == token_eos:
-                        stop = True
-                        break
-
-            elif do_sample == "top_p":
-                # set the temperature
-                logits = logits / temperature
-                probs = F.softmax(logits , dim=-1)  # 将logits转换为概率分布
-                sorted_probs, sorted_indices = torch.sort(probs, descending=True)  # 将概率从大到小排序
-                cumulative_probs = sorted_probs.cumsum(dim=-1)  # 计算累积概率
-                top_p_mask = cumulative_probs <= hyper_p  # 找出累积概率小于等于hyper_p的token
-                top_p_mask[..., 1:] = top_p_mask[..., :-1].clone()  # 确保至少有一个token被选择
-                top_p_mask[..., 0] = True  # 确保第一个token被选择
-                output_top_p_tokens = sorted_indices.masked_select(top_p_mask)  # 选择这些token
- 
-                output_lenght = end_index - start_index
-                for i in range(output_lenght):
-                    if i == output_lenght-1 or output_tokens[0, i] == token_eos or global_tokens[0, start_index+1+i] not in output_top_p_tokens:
-                        global_tokens[0, start_index+1+i] = output_tokens[0, i]
-                        start_index = start_index+1+i
-                        if output_tokens[0, i] == token_eos:
-                            stop = True
-                        break
-
-
-            elif do_sample == "top_k":
-                # Verification for top-k sampling
-                output_topk_tokens = torch.topk(logits,k=hyper_k,dim=-1).indices
-
-                output_lenght = end_index - start_index
-                for i in range(output_lenght):
-
-                    if i == output_lenght-1 or output_tokens[0, i] == token_eos or global_tokens[0, start_index+1+i] not in output_topk_tokens[0, i, :]:
-                        global_tokens[0, start_index+1+i] = output_tokens[0, i]
-                        start_index = start_index+1+i
-                        if output_tokens[0, i] == token_eos:
-                            stop = True
-                        break
-            # greedy decoding
-            else:
-                for i in range(output_length):
-                    if i == output_length - 1 or output_tokens[0, i] == token_eos or output_tokens[0, i] != global_tokens[0, start_index + 1 + i]:
-                        global_tokens[0, start_index + 1 + i] = output_tokens[0, i]
-                        start_index = start_index + 1 + i
-                        if output_tokens[0, i] == token_eos:
-                            stop = True
-                        break
-                    
-
-            accept_length_list.append(start_index - start_index_copy)
-            hidden_state = hidden_state[:, :output_length-(end_index-start_index), :]
-
-            # STEP 4: Post process KV-cache
-            if model.base_model.past_key_values[0][0].shape[2] > start_index:
-                past_key_values_large_ = []
-                for k,v in model.base_model.past_key_values:
-                    past_key_values_large_.append((k[:,:,:start_index,:], v[:,:,:start_index,:]))
-                model.base_model.past_key_values = past_key_values_large_
-
-            if adapter_past_key_values[0][0].shape[2] > start_index:
-                adapter_past_key_values_ = []
-                for k,v in adapter_past_key_values:
-                    adapter_past_key_values_.append((k[:,:,:start_index,:], v[:,:,:start_index,:]))
-                adapter_past_key_values = tuple(adapter_past_key_values_)
-                del adapter_past_key_values_
-            
-            total_inference_steps += 1
-
-            if stop:
+            # Check if the generated token is EOS
+            if next_token.item() == token_eos:
+                # Replace the EOS token with the last generated token and continue
+                # global_tokens[:, end_index] = global_tokens[:, end_index - 1]
                 break
 
-    output_ids = global_tokens[0, :start_index+1].tolist()
-    new_token = start_index - context_length + 1
+            start_index = end_index
+
+            # Stop if the maximum inference steps are reached
+            if end_index >= max_infer_steps:
+                break
+            # predict_logits = model.head_model(hidden_state[:, -1:, :]).float()
+            # global_tokens[:, end_index] = torch.argmax(predict_logits[:, -1, :], dim=-1)
+
+            
+            # end_index += 1
+            # start_index = end_index
+            # accept_token_list = global_tokens[0, :end_index].tolist()
+            # if global_tokens[:, end_index].item() == token_eos:
+            #     # replace the EOS token with the last token
+            #     break
+            
+                
+
+    output_ids = global_tokens[0, :end_index].tolist()
+    new_token = end_index - context_length
     idx = len(accept_length_list) - 1
     return [output_ids], new_token, idx, accept_length_list
 
@@ -502,7 +448,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--do_sample",
         type=str,
-        required=True,
+        # required=True,
     )
 
     parser.add_argument(
@@ -539,7 +485,8 @@ if __name__ == "__main__":
         parameter = f"epsilon_{args.epsilon}_delta_{args.delta}"        
 
     model_id = f"vicuna-7b-v1.3-kangaroo-{args.do_sample}_{parameter}_temp_{args.temperature}"
-    args.model_id = model_id
+    if args.do_sample != None:
+        args.model_id = model_id
     answer_file_dir = f"data/{args.bench_name}/{args.model_id}/{args.task}"
     os.makedirs(answer_file_dir, exist_ok=True)
     answer_file_name = f"{args.subtask}.json"

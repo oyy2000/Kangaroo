@@ -17,69 +17,6 @@ from kangaroo.kangaroo_model import KangarooModel
 from fastchat.model import get_conversation_template
 from tqdm import tqdm
 
-def apply_typical_acceptance(logits, candidates, temperature, posterior_threshold, posterior_alpha):
-    posterior_prob = torch.softmax(logits[:, :-1] / temperature, dim=-1)
-    candidates_prob = torch.gather(
-        posterior_prob, dim=-1, index=candidates[:, 1:].unsqueeze(-1)
-    ).squeeze(-1)
-    posterior_entropy = -torch.sum(
-        posterior_prob * torch.log(posterior_prob + 1e-5), dim=-1
-    )  # torch.sum(torch.log(*)) is faster than torch.prod
-    threshold = torch.minimum(
-        torch.ones_like(posterior_entropy) * posterior_threshold,
-        torch.exp(-posterior_entropy) * posterior_alpha,
-    )
-    posterior_mask = candidates_prob > threshold
-    candidates_accept_length = (torch.cumprod(posterior_mask, dim=1)).sum(dim=1)
-
-    # Choose the best candidate based on the evaluated posterior probabilities
-    accept_length = candidates_accept_length.max()
-    # transfer tensor accept_length to int
-    accept_length = accept_length.item()
-    if accept_length == 0:
-        # If no candidates are accepted, just choose the first one
-        best_candidate = torch.tensor(0, dtype=torch.long, device=candidates.device)
-    else:
-        best_candidates = torch.where(candidates_accept_length == accept_length)[0]
-        # Accept the best one according to likelihood
-        likelihood = torch.sum(
-            torch.log(candidates_prob[best_candidates, :accept_length]), dim=-1
-        )
-        best_candidate = best_candidates[torch.argmax(likelihood)]
-    return best_candidate, accept_length
-
-
-def apply_typical_acceptance_test(logits, candidates, temperature, posterior_threshold, posterior_alpha):
-    posterior_prob = torch.softmax(logits[:, :] / temperature, dim=-1)
-    candidates_prob = torch.gather(
-        posterior_prob, dim=-1, index=candidates[:, :].unsqueeze(-1)
-    ).squeeze(-1)
-    posterior_entropy = -torch.sum(
-        posterior_prob * torch.log(posterior_prob + 1e-5), dim=-1
-    )  # torch.sum(torch.log(*)) is faster than torch.prod
-    threshold = torch.minimum(
-        torch.ones_like(posterior_entropy) * posterior_threshold,
-        torch.exp(-posterior_entropy) * posterior_alpha,
-    )
-    posterior_mask = candidates_prob > threshold
-    candidates_accept_length = (torch.cumprod(posterior_mask, dim=1)).sum(dim=1)
-
-    # Choose the best candidate based on the evaluated posterior probabilities
-    accept_length = candidates_accept_length.max()
-    # transfer tensor accept_length to int
-    accept_length = accept_length.item()
-    if accept_length == 0:
-        # If no candidates are accepted, just choose the first one
-        best_candidate = torch.tensor(0, dtype=torch.long, device=candidates.device)
-    else:
-        best_candidates = torch.where(candidates_accept_length == accept_length)[0]
-        # Accept the best one according to likelihood
-        likelihood = torch.sum(
-            torch.log(candidates_prob[best_candidates, :accept_length]), dim=-1
-        )
-        best_candidate = best_candidates[torch.argmax(likelihood)]
-    return best_candidate, accept_length
-
 def save_json(data, file_path):
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
@@ -258,9 +195,9 @@ def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample="typica
     device = context_tokens.device 
     token_eos = tokenizer.eos_token_id # 1
     batch_size, context_length = context_tokens.shape # batchsize, input_length
-    global_tokens = torch.ones((batch_size, max_length), dtype=torch.long, device=device) * token_eos # 生成一个全是1的tensor，大小为batchsize, max_length
+    global_tokens = torch.ones((batch_size, max_length), dtype=torch.long, device=device) * token_eos # 用于存储本轮输出，生成一个全是1的tensor，大小为batchsize, max_length
     global_position_ids = torch.LongTensor([[i for i in range(max_length)]]).to(device) # 生成一个从0到max_length的tensor，作为position_ids 
-    accept_length_list = [1] # 生成一个长度为1的list，值为1
+    accept_length_list = [1] # 每次接收小模型token长度的list, 生成一个长度为1的list，值为1
 
     start_index = context_length # 从context_length开始，也就是 prompt的下一个token
     global_tokens[:, :start_index] = context_tokens # 把prompt的token放到global_tokens的前面， : 是一个左闭右开的区间，所以不包含start_index
@@ -286,7 +223,7 @@ def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample="typica
     with torch.no_grad():
         max_infer_steps = min(max_length, start_index + max_new_tokens)
         stop = False
-        # 使用draft model 进行快速推理
+        # 使用draft model进行快速推理
         while start_index < max_infer_steps - 1 - SPECULATIVE_DECODING_STEPS:
 
             start_index_copy = start_index # 保存start_index的值
@@ -294,8 +231,9 @@ def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample="typica
             
             # STEP 1: Small model decoding
             for step in range(1 + SPECULATIVE_DECODING_STEPS):
-                assert adapter_past_key_values[0][0].shape[2] <= end_index-1, "{} - {}".format(adapter_past_key_values[0][0].shape, end_index-1)
+                assert adapter_past_key_values[0][0].shape[2] <= end_index-1, "{} - {}".format(adapter_past_key_values[0][0].shape, end_index-1) 
                 in_tokens_small = global_tokens[:, end_index-1:end_index]
+                # 如果KV-cache的长度小于end_index-1, 也就是所有的draft token都被接受了
                 if adapter_past_key_values[0][0].shape[2] < end_index-1: 
                     # As illustrated in the framework of Kangaroo, once all drafted tokens are accepted, the KV-cache of the last draft token for the adapter is missing.
                     position_ids = global_position_ids[:, start_index-1:end_index]
@@ -362,14 +300,6 @@ def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample="typica
                         if stop or start_index >= max_infer_steps:
                             break
 
-            elif do_sample == "typical_test": 
-                candidates = global_tokens[:, start_index: end_index]
-                # posterior_threshold=0.3, posterior_alpha = 0.09, top_p=0.8
-                _best_candidates, accept_length = apply_typical_acceptance_test(logits, candidates, temperature, posterior_threshold, posterior_alpha)
-                start_index += accept_length + 1
-                for i in range(output_length):
-                    if output_tokens[0, i] == token_eos:
-                            stop = True
             elif do_sample == "typical_sampling":
                 for i in range(output_length):
                     # Calculate posterior probabilities
@@ -458,6 +388,7 @@ def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample="typica
             accept_length_list.append(start_index - start_index_copy)
             hidden_state = hidden_state[:, :output_length-(end_index-start_index), :]
 
+            # 将 basemodel以及adapter model 的 KV-cache 进行更新
             # STEP 4: Post process KV-cache
             if model.base_model.past_key_values[0][0].shape[2] > start_index:
                 past_key_values_large_ = []
