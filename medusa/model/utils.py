@@ -457,6 +457,7 @@ def evaluate_posterior(
     """
     # Greedy decoding based on temperature value
     if temperature == 0:
+
         # Find the tokens that match the maximum logits for each position in the sequence
         posterior_mask = (
             candidates[:, 1:] == torch.argmax(logits[:, :-1], dim=-1)

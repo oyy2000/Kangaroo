@@ -175,3 +175,7 @@ llm_judge/data/mt_bench_test
 llm_judge/data/mt_bench_test_rs
 data
 medusa/eval/*.sh
+
+
+# checkpoints
+checkpoints/
