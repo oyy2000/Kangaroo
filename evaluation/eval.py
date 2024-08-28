@@ -90,7 +90,7 @@ def get_model_answers(
     question = questions[0]
 
     # warmup
-    for _ in range(3):
+    for _ in range(1):
         torch.manual_seed(0)
         conv = get_conversation_template("vicuna")
         turns = []

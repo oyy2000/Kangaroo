@@ -11,11 +11,26 @@ import time
 import numpy as np
 import shortuuid
 import torch.nn.functional as F
+from trustllm.task import safety
+from trustllm.utils import file_process
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from kangaroo.kangaroo_model import KangarooModel
 from fastchat.model import get_conversation_template
 from tqdm import tqdm
+import random
+from transformers import set_seed
+
+seed = 0
+torch.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+np.random.seed(seed)
+random.seed(seed)
+set_seed(seed)
+
+# For reproducibility in convolution operations, etc.
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 def save_json(data, file_path):
     with open(file_path, 'w', encoding='utf-8') as f:
@@ -52,21 +67,17 @@ def generation(
     get_answers_func = get_model_answers
 
     chunk_size = len(questions) // (num_gpus_total // num_gpus_per_model)  # // 2
-    ans_handles = []
     for i in range(0, len(questions), chunk_size):
-
-        ans_handles.append(
-            get_answers_func(
-                model,
-                tokenizer,
-                forward_func,
-                model_id,
-                questions[i: i + chunk_size],
-                answer_file,
-                max_new_tokens,
-                num_choices,
-                **kwargs,
-            )
+        get_answers_func(
+            model,
+            tokenizer,
+            forward_func,
+            model_id,
+            questions[i: i + chunk_size],
+            answer_file,
+            max_new_tokens,
+            num_choices,
+            **kwargs,
         )
 
 
@@ -182,12 +193,18 @@ def get_model_answers(
     print("#Mean accepted tokens: ", np.mean(accept_lengths_tree))
     # create a log file if not exists
     log_file_path = os.path.join(answer_file_dir, f"log_{args.subtask}.txt")
-
+    
+        
     with open(log_file_path, 'w') as f:
+        evaluator = safety.SafetyEval()
+        jailbreak_data = file_process.load_json(answer_file)
+        jailbreak_score = evaluator.jailbreak_eval(jailbreak_data, eval_type='total')
+        print(f"jailbreak score: {jailbreak_score}\n")
         f.write(f"Model: {args.model_id}\n")
         f.write(f"Total questions: {len(questions)}\n")
         f.write(f"Mean wall time: {np.mean(wall_time_list)}\n")
-        f.write(f"Mean accepted tokens: {np.mean(accept_lengths_tree)}\n")    
+        f.write(f"Mean accepted tokens: {np.mean(accept_lengths_tree)}\n")  
+        f.write(f"jailbreak score: {jailbreak_score}\n")
 
 
 def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample="typical", max_length = 2048, EARLY_STOP_LAYER = 2, SPECULATIVE_DECODING_STEPS = 6, temperature = 0.7, threshold = 0.6, hyper_k = 2, hyper_p = 0.8, epsilon = 0.3, delta = 0.09):
@@ -540,7 +557,7 @@ if __name__ == "__main__":
         parameter = f"epsilon_{args.epsilon}_delta_{args.delta}"        
 
     model_id = f"vicuna-7b-v1.3-kangaroo-{args.do_sample}_{parameter}_temp_{args.temperature}"
-    args.model_id = model_id
+    args.model_id = model_id + "-special"
     answer_file_dir = f"data/{args.bench_name}/{args.model_id}/{args.task}"
     os.makedirs(answer_file_dir, exist_ok=True)
     answer_file_name = f"{args.subtask}.json"

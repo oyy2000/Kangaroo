@@ -1,0 +1,47 @@
+2024-08-25 19:49:36,770:INFO:Total data number: 1400
+2024-08-25 19:49:36,774:INFO:Total data number: 1400
+2024-08-25 19:49:36,774:INFO:Evaluating...
+2024-08-25 19:50:18,810:INFO:Processed batch from 0 to 32
+2024-08-25 19:50:27,422:INFO:Processed batch from 32 to 64
+2024-08-25 19:50:37,435:INFO:Processed batch from 64 to 96
+2024-08-25 19:50:46,175:INFO:Processed batch from 96 to 128
+2024-08-25 19:50:55,185:INFO:Processed batch from 128 to 160
+2024-08-25 19:51:02,522:INFO:Processed batch from 160 to 192
+2024-08-25 19:51:11,620:INFO:Processed batch from 192 to 224
+2024-08-25 19:51:20,331:INFO:Processed batch from 224 to 256
+2024-08-25 19:51:29,651:INFO:Processed batch from 256 to 288
+2024-08-25 19:51:38,409:INFO:Processed batch from 288 to 320
+2024-08-25 19:51:45,305:INFO:Processed batch from 320 to 352
+2024-08-25 19:51:52,459:INFO:Processed batch from 352 to 384
+2024-08-25 19:52:00,701:INFO:Processed batch from 384 to 416
+2024-08-25 19:52:09,481:INFO:Processed batch from 416 to 448
+2024-08-25 19:52:18,879:INFO:Processed batch from 448 to 480
+2024-08-25 19:52:26,622:INFO:Processed batch from 480 to 512
+2024-08-25 19:52:36,301:INFO:Processed batch from 512 to 544
+2024-08-25 19:52:44,874:INFO:Processed batch from 544 to 576
+2024-08-25 19:52:54,349:INFO:Processed batch from 576 to 608
+2024-08-25 19:53:03,704:INFO:Processed batch from 608 to 640
+2024-08-25 19:53:12,548:INFO:Processed batch from 640 to 672
+2024-08-25 19:53:20,122:INFO:Processed batch from 672 to 704
+2024-08-25 19:53:28,293:INFO:Processed batch from 704 to 736
+2024-08-25 19:53:37,706:INFO:Processed batch from 736 to 768
+2024-08-25 19:53:46,653:INFO:Processed batch from 768 to 800
+2024-08-25 19:53:54,986:INFO:Processed batch from 800 to 832
+2024-08-25 19:54:03,413:INFO:Processed batch from 832 to 864
+2024-08-25 19:54:12,085:INFO:Processed batch from 864 to 896
+2024-08-25 19:54:22,823:INFO:Processed batch from 896 to 928
+2024-08-25 19:54:31,778:INFO:Processed batch from 928 to 960
+2024-08-25 19:54:40,223:INFO:Processed batch from 960 to 992
+2024-08-25 19:54:48,696:INFO:Processed batch from 992 to 1024
+2024-08-25 19:54:58,263:INFO:Processed batch from 1024 to 1056
+2024-08-25 19:55:06,384:INFO:Processed batch from 1056 to 1088
+2024-08-25 19:55:15,438:INFO:Processed batch from 1088 to 1120
+2024-08-25 19:55:24,823:INFO:Processed batch from 1120 to 1152
+2024-08-25 19:55:34,004:INFO:Processed batch from 1152 to 1184
+2024-08-25 19:55:42,265:INFO:Processed batch from 1184 to 1216
+2024-08-25 19:55:51,860:INFO:Processed batch from 1216 to 1248
+2024-08-25 19:55:57,522:INFO:Processed batch from 1248 to 1280
+2024-08-25 19:56:07,130:INFO:Processed batch from 1280 to 1312
+2024-08-25 19:56:15,712:INFO:Processed batch from 1312 to 1344
+2024-08-25 19:56:25,411:INFO:Processed batch from 1344 to 1376
+2024-08-25 19:56:31,553:INFO:Processed batch from 1376 to 1408

@@ -1,3 +1,5 @@
+from itertools import product
+
 # Define ranges for top_p and temperature
 top_p_values = [0.1, 0.3, 0.5, 0.7, 0.9]
 
@@ -42,20 +44,23 @@ combinations = list(product(top_p_values, temperature_values))
 # Number of GPUs available
 num_gpus = 8  # Adjust this to match the number of GPUs you have
 
-def get_free_gpu():
+def get_free_gpus():
     # Run nvidia-smi command and get the output
     result = subprocess.run(['nvidia-smi', '--query-gpu=memory.free', '--format=csv,nounits,noheader'], stdout=subprocess.PIPE)
     # Decode the output and split by lines
     gpu_memory = result.stdout.decode('utf-8').strip().split('\n')
-    # Convert to integer
-    gpu_memory = [int(x) for x in gpu_memory]
-    # Get the index of the GPU with the most free memory
-    free_gpu = gpu_memory.index(max(gpu_memory))
-    return free_gpu
+    # Convert to integer and get the indices of the GPUs sorted by free memory (descending order)
+    gpu_memory = [(i, int(mem)) for i, mem in enumerate(gpu_memory)]
+    sorted_gpus = sorted(gpu_memory, key=lambda x: x[1], reverse=True)
+    # Return the list of GPU indices sorted by free memory
+    free_gpus = [gpu[0] for gpu in sorted_gpus]
+    return free_gpus
 
 # Function to run a single command
-def run_command(temperature):
-    gpu_id = get_free_gpu()  # Get the GPU with the most free memory
+def run_command(index, temperature):
+    free_gpus = get_free_gpus()  # Get a list of GPUs sorted by free memory
+    print(f"Free GPUs: {free_gpus}")
+    gpu_id = free_gpus[index % len(free_gpus)]  # Use round-robin assignment of GPU ID
     command = f'CUDA_VISIBLE_DEVICES={gpu_id} python -m evaluation.inference_baseline_MMLU --model-path "vicuna-7b-v1.3" --bench-name "MMLU" --temperature {temperature} --dtype "float16" --data-dir "data/MMLU_data" --save-dir "data/MMLU_results"'
     print(f"Running on GPU {gpu_id}: {command}")
     subprocess.call(command, shell=True)

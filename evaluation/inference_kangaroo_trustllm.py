@@ -15,6 +15,8 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from kangaroo.kangaroo_model import KangarooModel
 from fastchat.model import get_conversation_template
 from tqdm import tqdm
+torch.manual_seed(0)
+np.random.seed(0)
 
 def save_json(data, file_path):
     with open(file_path, 'w', encoding='utf-8') as f:
@@ -67,8 +69,6 @@ def generation(
                 **kwargs,
             )
         )
-
-
 
 @torch.inference_mode()
 def get_model_answers(
