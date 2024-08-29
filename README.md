@@ -71,6 +71,13 @@ To get the detailed speed information, run ``python evaluation/speed.py``.
 The corresponding huggingface ckpts of kangaroo can be downloaded at [Kangaroo Google Drive](https://drive.google.com/drive/folders/1_lSqhasWeIUyfCft50JtKuQ2-TWepm8p?usp=sharing).
 
 
+#### Experienment
+```
+Kangaroo/queue_script.py is a script for running multiple experiments which could find the free GPU cards and run the experiments automatically.
+
+Using the shell.sh to run the queue_script.py.
+```
+
 #### Citation
 
 ```
