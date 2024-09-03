@@ -9,7 +9,6 @@ import json
 import os
 import time
 import numpy as np
-import shortuuid
 import torch.nn.functional as F
 from trustllm.task import safety
 from trustllm.utils import file_process
@@ -32,6 +31,33 @@ set_seed(seed)
 # For reproducibility in convolution operations, etc.
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
+
+def load_quantized_model_and_tokenizer(model_name, adapter_path, device, dtype):
+    # Load tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    
+    # Load quantized model
+    if dtype == "int8":
+        model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto", load_in_8bit=True)
+    elif dtype == "int4":
+        model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto", load_in_4bit=True)
+    else:
+        model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto", torch_dtype=getattr(torch, dtype))
+    
+    # Load and quantize AdapterModel
+    config = LlamaConfig.from_pretrained(os.path.join(adapter_path, "config.json"))
+    adapter_model = AdapterModel(config)
+    adapter_state_dict = torch.load(os.path.join(adapter_path, "pytorch_model.bin"), map_location="cpu")
+    
+    # Quantize adapter weights
+    for key, value in adapter_state_dict.items():
+        if value.dtype == torch.float32:
+            adapter_state_dict[key] = value.to(getattr(torch, dtype))
+    
+    adapter_model.load_state_dict(adapter_state_dict, strict=False)
+    adapter_model = adapter_model.eval().to(device)
+    
+    return model, tokenizer, adapter_model
 
 def save_json(data, file_path):
     with open(file_path, 'w', encoding='utf-8') as f:
@@ -112,8 +138,6 @@ def get_model_answers(
             # torch.manual_seed(i)
             conv = get_conversation_template("vicuna")
             turns = []
-            idxs = []
-            new_tokens = []
             wall_time = []
             q_prompt = question["prompt"]
             conv.append_message(conv.roles[0], q_prompt)
@@ -204,6 +228,8 @@ def get_model_answers(
         f.write(f"Mean wall time: {np.mean(wall_time_list)}\n")
         f.write(f"Mean accepted tokens: {np.mean(accept_lengths_tree)}\n")  
         f.write(f"jailbreak score: {jailbreak_score}\n")
+
+
 def calculate_entropy(logits):
     # Softmax to probabilities
     probs = torch.nn.functional.softmax(logits, dim=-1)
@@ -211,17 +237,28 @@ def calculate_entropy(logits):
     entropy = -torch.sum(probs * torch.log(probs + 1e-12), dim=-1)
     return entropy
 
-def fuse_layers(layer5_output, final_hidden_output):
-     # Calculate entropy of the 5th layer's output
-    entropy = calculate_entropy(final_hidden_output[:, -1, :])  # Only use the last token's logits for entropy calculation
-    
+def fuse_layers(layer_output, final_logits, model, temperature=1.0, alpha=0.1):
+    # Apply the language model head to the intermediate layer output
+    layer_logits = model.lm_head(layer_output)
+
     # Calculate alpha using sigmoid function
-    alpha = torch.sigmoid(-entropy) + 0.5
-    # Compute fused logits
-    fused_logits = alpha.unsqueeze(-1) * layer5_output + (1 - alpha.unsqueeze(-1)) * final_hidden_output
-    return fused_logits
+    # alpha = 0.01 # torch.sigmoid(-entropy) + 0.5
+    
+    # Apply temperature scaling
+    layer_logits /= (temperature + 1e-5)
+    final_logits /= (temperature + 1e-5)
+    
+    # Compute softmax probabilities
+    layer_probs = F.softmax(layer_logits, dim=-1)
+    final_probs = F.softmax(final_logits, dim=-1)
+    
+    # Fuse probabilities
+    fused_probs = alpha * layer_probs + (1 - alpha) * final_probs
+    
+    return fused_probs
+
 # Modify the generate_with_fusion function to use the AdapterModel
-def generate_with_fusion(model, adapter_model, tokenizer, input_ids, max_new_tokens, temperature=1.0, batch_size=10, fusion_layer=2):
+def generate_with_fusion(model, adapter_model, tokenizer, input_ids, max_new_tokens, temperature=1.0, batch_size=1, fusion_layer=2, alpha=0.1, **kwargs):
     device = next(model.parameters()).device
     input_ids = input_ids.to(device)
     batch_size = min(batch_size, input_ids.shape[0])
@@ -235,20 +272,16 @@ def generate_with_fusion(model, adapter_model, tokenizer, input_ids, max_new_tok
 
         past_key_values = outputs.past_key_values
 
-        fusion_layer_output = outputs.hidden_states[fusion_layer]
-        final_hidden_output = outputs.hidden_states[-1]
+        layer_output = outputs.hidden_states[fusion_layer]
+        final_logits = outputs.logits  # Use the logits directly from the model output
 
         # Use AdapterModel to refine layer 5 output
-        refined_fusion_layer_output = adapter_model(inputs_embeds=fusion_layer_output)
+        refined_fusion_layer_output = adapter_model(inputs_embeds=layer_output)
 
-        fused_logits = fuse_layers(refined_fusion_layer_output, final_hidden_output)
-
-        if temperature != 1.0:
-            fused_logits = fused_logits / temperature
-
-        next_token_logits = fused_logits[:, -1, :]
-        probabilities = F.softmax(next_token_logits, dim=-1)
-        next_tokens = torch.multinomial(probabilities, num_samples=1)
+        fused_probs = fuse_layers(refined_fusion_layer_output, final_logits, model, temperature=temperature, alpha=alpha)
+      
+        next_token_probs = fused_probs[:, -1, :]
+        next_tokens = torch.multinomial(next_token_probs, num_samples=1)
 
         generated_tokens.append(next_tokens)
         input_ids = next_tokens
@@ -259,10 +292,10 @@ def generate_with_fusion(model, adapter_model, tokenizer, input_ids, max_new_tok
     return torch.cat(generated_tokens, dim=1)
 
 def generate_sequence(inputs, model, adapter_model, tokenizer, max_new_tokens, device, temperature=0.7, batch_size=10, **kwargs):
-    input_ids = inputs.input_ids.to(device)
-    attention_mask = inputs.attention_mask.to(device)
 
-    generated_sequence = generate_with_fusion(model, adapter_model, tokenizer, input_ids, max_new_tokens, temperature, batch_size)
+    input_ids = inputs.input_ids.to(device)
+
+    generated_sequence = generate_with_fusion(model, adapter_model, tokenizer, input_ids, max_new_tokens, temperature, batch_size, **kwargs)
 
     full_sequence = torch.cat([input_ids, generated_sequence], dim=1)
 
@@ -395,23 +428,38 @@ if __name__ == "__main__":
         default=5,
     )
 
+    parser.add_argument(
+        "--alpha",
+        type=float,
+    )
+
+    parser.add_argument(
+        "--quantization",
+        type=str,
+        default="float16",
+        choices=["float32", "float16", "bfloat16", "int8", "int4"],
+        help="Quantization type for the model.",
+    )
+    
     args = parser.parse_args()
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model_name = "vicuna-7b-v1.3"
+    model, tokenizer, adapter_model = load_quantized_model_and_tokenizer(
+        args.model_path, 
+        args.adapter_path, 
+        device, 
+        args.quantization
+    )
     
     question_file = f"data/eval_data/{args.task}/{args.subtask}.json"
 
-    model_name = "vicuna-7b-v1.3"
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(model_name)
-    # Move model to GPU if available
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model = model.to(device)
-
-    # Initialize and load AdapterModel
-    adapter_model_path = args.adapter_path
-    config = LlamaConfig.from_pretrained(os.path.join(adapter_model_path, "config.json"))
-    adapter_model = AdapterModel(config)
-    adapter_model.load_state_dict(torch.load(os.path.join(adapter_model_path, "pytorch_model.bin"), map_location="cpu"), strict=False)
-    adapter_model = adapter_model.eval().to(device)
+    # # Initialize and load AdapterModel
+    # adapter_model_path = args.adapter_path
+    # config = LlamaConfig.from_pretrained(os.path.join(adapter_model_path, "config.json"))
+    # adapter_model = AdapterModel(config)
+    # adapter_model.load_state_dict(torch.load(os.path.join(adapter_model_path, "pytorch_model.bin"), map_location="cpu"), strict=False)
+    # adapter_model = adapter_model.eval().to(device)
     
    
     if args.do_sample == "top_k":
@@ -421,9 +469,9 @@ if __name__ == "__main__":
     else:
         parameter = f"epsilon_{args.epsilon}_delta_{args.delta}"        
 
-    model_id = f"vicuna-7b-v1.3-df-temp-{args.temperature}-layer-{args.fusion_layer}"
+    model_id = f"vicuna-7b-v1.3-df2-temp-{args.temperature}-layer-{args.fusion_layer}-alpha-{args.alpha}"
     args.model_id = model_id
-    answer_file_dir = f"data/{args.bench_name}/{args.model_id}/{args.task}"
+    answer_file_dir = f"data/{args.bench_name}/dynamic_fusion/{args.model_id}/{args.task}"
     os.makedirs(answer_file_dir, exist_ok=True)
     answer_file_name = f"{args.subtask}.json"
     
@@ -451,4 +499,5 @@ if __name__ == "__main__":
         fusion_layer=args.fusion_layer,
         device=device,  # Pass the device to the generation function
         adapter_model=adapter_model,
+        alpha=args.alpha
     )

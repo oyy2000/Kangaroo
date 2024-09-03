@@ -382,7 +382,7 @@ if __name__ == "__main__":
 
     model_id = f"baseline-vicuna-7b-v1.3-temp_{args.temperature}"
     args.model_id = model_id
-    answer_file_dir = f"data/{args.bench_type}/{args.model_id}/{args.task}"
+    answer_file_dir = f"data/{args.bench_type}/baseline/{args.model_id}/{args.task}"
     os.makedirs(answer_file_dir, exist_ok=True)
     answer_file_name = f"{args.subtask}.json"
     

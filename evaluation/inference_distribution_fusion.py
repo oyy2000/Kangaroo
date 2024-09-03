@@ -11,9 +11,9 @@ import time
 import numpy as np
 import shortuuid
 import torch.nn.functional as F
+
 from trustllm.task import safety
 from trustllm.utils import file_process
-
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from kangaroo.kangaroo_model import KangarooModel
 from fastchat.model import get_conversation_template
@@ -200,9 +200,7 @@ def get_model_answers(
         f.write(f"Mean accepted tokens: {np.mean(accept_lengths_tree)}\n")  
         f.write(f"jailbreak score: {jailbreak_score}\n")
 
-import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import torch.nn.functional as F
+
 
 def calculate_entropy(logits):
     # Softmax to probabilities
@@ -211,63 +209,63 @@ def calculate_entropy(logits):
     entropy = -torch.sum(probs * torch.log(probs + 1e-12), dim=-1)
     return entropy
 
-def fuse_layers(layer5_output, final_hidden_output):
-     # Calculate entropy of the 5th layer's output
-    entropy = calculate_entropy(final_hidden_output[:, -1, :])  # Only use the last token's logits for entropy calculation
+def fuse_layers(layer_output, final_logits, model, temperature=1.0, alpha=0.01):
+    # Apply the language model head to the intermediate layer output
+    layer_logits = model.lm_head(layer_output)
+
+    # Calculate entropy of the fusion layer's output
+    entropy = calculate_entropy(layer_logits[:, -1, :])  # Only use the last token's logits for entropy calculation
     
     # Calculate alpha using sigmoid function
-    alpha = torch.sigmoid(-entropy) + 0.5
-    # Compute fused logits
-    fused_logits = alpha.unsqueeze(-1) * layer5_output + (1 - alpha.unsqueeze(-1)) * final_hidden_output
-    return fused_logits
+    # alpha = 0.1 # torch.sigmoid(-entropy) + 0.5
+    
+    # Apply temperature scaling
+    layer_logits /= (temperature + 1e-5)
+    final_logits /= (temperature + 1e-5)
+    
+    # Compute softmax probabilities
+    layer_probs = F.softmax(layer_logits, dim=-1)
+    final_probs = F.softmax(final_logits, dim=-1)
+    
+    # Fuse probabilities
+    fused_probs = alpha * layer_probs + (1 - alpha) * final_probs
+    
+    return fused_probs
 
-def generate_with_fusion(model, tokenizer, input_ids, max_new_tokens, temperature=1.0, batch_size=10):
+def generate_with_fusion(model, tokenizer, input_ids, max_new_tokens, temperature=1.0, batch_size=10, fusion_layer=15, **kwargs):
     device = next(model.parameters()).device
     input_ids = input_ids.to(device)
     batch_size = min(batch_size, input_ids.shape[0])
     
-    # Initialize past key values
     past_key_values = None
     generated_tokens = []
     
     for _ in range(0, max_new_tokens, batch_size):
-        # Forward pass with `output_hidden_states=True` to get all hidden states
         with torch.no_grad():
             outputs = model(input_ids, past_key_values=past_key_values, use_cache=True, output_hidden_states=True)
 
-        # Update past key values for next iteration
         past_key_values = outputs.past_key_values
 
-        # Extract the hidden states from the 5th layer and the final layer
-        layer5_output = outputs.hidden_states[5]
-        final_hidden_output = outputs.hidden_states[-1]
+        layer_output = outputs.hidden_states[fusion_layer]
+        final_logits = outputs.logits  # Use the logits directly from the model output
 
-        # Fuse the outputs
-        fused_logits = fuse_layers(layer5_output, final_hidden_output)
+        fused_probs = fuse_layers(layer_output, final_logits, model, temperature)
 
-        # Apply temperature scaling
-        if temperature != 1.0:
-            fused_logits = fused_logits / temperature
-
-        # Use the fused logits to sample the next tokens
-        next_token_logits = fused_logits[:, -1, :]
-        probabilities = F.softmax(next_token_logits, dim=-1)
-        next_tokens = torch.multinomial(probabilities, num_samples=1)
+        next_token_probs = fused_probs[:, -1, :]
+        next_tokens = torch.multinomial(next_token_probs, num_samples=1)
 
         generated_tokens.append(next_tokens)
-        input_ids = next_tokens  # Use only the newly generated tokens as input for the next iteration
+        input_ids = next_tokens
 
-        # Break if end of sequence token is generated for all sequences
         if (next_tokens == tokenizer.eos_token_id).all():
             break
 
     return torch.cat(generated_tokens, dim=1)
 
-def generate_sequence(inputs, model, tokenizer, max_new_tokens, device, temperature=0.7, batch_size=10, **kwargs):
+def generate_sequence(inputs, model, tokenizer, max_new_tokens, device, temperature=0.7, batch_size=10, fusion_layer=15, **kwargs):
     input_ids = inputs.input_ids.to(device)
-    attention_mask = inputs.attention_mask.to(device)
 
-    generated_sequence = generate_with_fusion(model, tokenizer, input_ids, max_new_tokens, temperature, batch_size)
+    generated_sequence = generate_with_fusion(model, tokenizer, input_ids, max_new_tokens, temperature, batch_size, fusion_layer)
     
     full_sequence = torch.cat([input_ids, generated_sequence], dim=1)
     
@@ -371,7 +369,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--do_sample",
         type=str,
-        required=True,
+        # required=True,
     )
 
     parser.add_argument(
@@ -395,6 +393,12 @@ if __name__ == "__main__":
     )
     
     parser.add_argument(
+        "--alpha",
+        type=float,
+    )
+    
+    
+    parser.add_argument(
         "--fusion-layer",
         type=int,
         default=5,
@@ -411,16 +415,10 @@ if __name__ == "__main__":
     # Move model to GPU if available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
-    if args.do_sample == "top_k":
-        parameter = f"{args.hyper_k}"
-    elif args.do_sample == "top_p":
-        parameter = f"{args.hyper_p}"
-    else:
-        parameter = f"epsilon_{args.epsilon}_delta_{args.delta}"        
 
-    model_id = f"vicuna-7b-v1.3-df-temp-{args.temperature}-layer-{args.fusion_layer}"
+    model_id = f"vicuna-7b-v1.3-df-temp-{args.temperature}-layer-{args.fusion_layer}-alpha-{args.alpha}"
     args.model_id = model_id
-    answer_file_dir = f"data/{args.bench_name}/{args.model_id}/{args.task}"
+    answer_file_dir = f"data/{args.bench_name}/dynamic_fusion/{args.model_id}/{args.task}"
     os.makedirs(answer_file_dir, exist_ok=True)
     answer_file_name = f"{args.subtask}.json"
     
@@ -447,4 +445,5 @@ if __name__ == "__main__":
         EARLY_STOP_LAYER=args.exitlayer,
         fusion_layer=args.fusion_layer,
         device=device,  # Pass the device to the generation function
+        alpha=args.alpha,
     )

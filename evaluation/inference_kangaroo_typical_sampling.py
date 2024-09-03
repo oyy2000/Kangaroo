@@ -359,7 +359,7 @@ def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample="typica
 
             elif do_sample == "top_p":
                 # set the temperature
-                logits = logits / temperature
+                logits = logits / (temperature + 1e-20)  
                 probs = F.softmax(logits , dim=-1)  # 将logits转换为概率分布
                 sorted_probs, sorted_indices = torch.sort(probs, descending=True)  # 将概率从大到小排序
                 cumulative_probs = sorted_probs.cumsum(dim=-1)  # 计算累积概率
@@ -558,7 +558,7 @@ if __name__ == "__main__":
 
     model_id = f"vicuna-7b-v1.3-kangaroo-{args.do_sample}_{parameter}_temp_{args.temperature}"
     args.model_id = model_id + "-special"
-    answer_file_dir = f"data/{args.bench_name}/{args.model_id}/{args.task}"
+    answer_file_dir = f"data/{args.bench_name}/kangaroo/{args.model_id}/{args.task}"
     os.makedirs(answer_file_dir, exist_ok=True)
     answer_file_name = f"{args.subtask}.json"
     

@@ -2276,3 +2276,54 @@ Compile with `TORCH_USE_CUDA_DSA` to enable device-side assertions.
 2024-08-28 06:36:11,718:INFO:Processed batch from 1376 to 1408
 2024-08-28 07:30:21,749:INFO:We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
 2024-08-28 10:21:51,339:INFO:We will use 90% of the memory on device 0 for storing the model, and 10% for the buffer to avoid OOM. You can set `max_memory` in to a higher value to use more memory (at your own risk).
+2024-09-03 16:28:41,964:INFO:Note: NumExpr detected 48 cores but "NUMEXPR_MAX_THREADS" not set, so enforcing safe limit of 8.
+2024-09-03 16:28:41,964:INFO:Note: NumExpr detected 48 cores but "NUMEXPR_MAX_THREADS" not set, so enforcing safe limit of 8.
+2024-09-03 16:28:41,964:INFO:Note: NumExpr detected 48 cores but "NUMEXPR_MAX_THREADS" not set, so enforcing safe limit of 8.
+2024-09-03 16:28:41,964:INFO:NumExpr defaulting to 8 threads.
+2024-09-03 16:28:41,964:INFO:NumExpr defaulting to 8 threads.
+2024-09-03 16:28:41,964:INFO:NumExpr defaulting to 8 threads.
+2024-09-03 17:38:18,121:INFO:Total data number: 1400
+2024-09-03 17:38:18,124:INFO:Total data number: 1400
+2024-09-03 17:38:18,124:INFO:Evaluating...
+2024-09-03 17:38:25,991:INFO:Processed batch from 0 to 32
+2024-09-03 17:38:33,234:INFO:Processed batch from 32 to 64
+2024-09-03 17:38:40,357:INFO:Processed batch from 64 to 96
+2024-09-03 17:38:47,610:INFO:Processed batch from 96 to 128
+2024-09-03 17:38:55,148:INFO:Processed batch from 128 to 160
+2024-09-03 17:39:02,196:INFO:Processed batch from 160 to 192
+2024-09-03 17:39:09,469:INFO:Processed batch from 192 to 224
+2024-09-03 17:39:16,501:INFO:Processed batch from 224 to 256
+2024-09-03 17:39:23,947:INFO:Processed batch from 256 to 288
+2024-09-03 17:39:31,452:INFO:Processed batch from 288 to 320
+2024-09-03 17:39:38,502:INFO:Processed batch from 320 to 352
+2024-09-03 17:39:46,336:INFO:Processed batch from 352 to 384
+2024-09-03 17:39:53,342:INFO:Processed batch from 384 to 416
+2024-09-03 17:40:00,429:INFO:Processed batch from 416 to 448
+2024-09-03 17:40:13,251:INFO:Processed batch from 448 to 480
+2024-09-03 17:40:20,496:INFO:Processed batch from 480 to 512
+2024-09-03 17:40:23,328:INFO:Total data number: 1400
+2024-09-03 17:40:23,329:INFO:Total data number: 1400
+2024-09-03 17:40:23,330:INFO:Evaluating...
+2024-09-03 17:40:27,565:INFO:Total data number: 1400
+2024-09-03 17:40:27,567:INFO:Total data number: 1400
+2024-09-03 17:40:27,567:INFO:Evaluating...
+2024-09-03 17:42:40,968:INFO:Total data number: 1400
+2024-09-03 17:42:40,969:INFO:Total data number: 1400
+2024-09-03 17:42:40,969:INFO:Evaluating...
+2024-09-03 17:50:05,821:INFO:Processed batch from 512 to 544
+2024-09-03 17:58:25,834:INFO:Processed batch from 0 to 32
+2024-09-03 18:01:02,802:INFO:Processed batch from 0 to 32
+2024-09-03 18:04:07,689:INFO:Processed batch from 0 to 32
+2024-09-03 18:09:43,323:INFO:Processed batch from 544 to 576
+2024-09-03 18:18:29,365:INFO:Processed batch from 32 to 64
+2024-09-03 18:20:59,329:INFO:Processed batch from 32 to 64
+2024-09-03 18:23:50,448:INFO:Processed batch from 32 to 64
+2024-09-03 18:30:30,382:INFO:Processed batch from 576 to 608
+2024-09-03 18:38:35,354:INFO:Processed batch from 64 to 96
+2024-09-03 18:41:15,725:INFO:Processed batch from 64 to 96
+2024-09-03 18:44:18,250:INFO:Processed batch from 64 to 96
+2024-09-03 18:49:59,341:INFO:Processed batch from 608 to 640
+2024-09-03 18:57:49,238:INFO:Processed batch from 96 to 128
+2024-09-03 19:02:07,678:INFO:Processed batch from 96 to 128
+2024-09-03 19:05:22,802:INFO:Processed batch from 96 to 128
+2024-09-03 19:10:25,126:INFO:Processed batch from 640 to 672
