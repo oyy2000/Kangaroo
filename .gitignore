@@ -4,3 +4,5 @@ __pycache__
 /data
 /checkpoints/*
 /saved_evaluations
+.locks
+/models--lmsys--vicuna-7b-v1.3
