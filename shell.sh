@@ -1,3 +1,4 @@
+python queue_script.py --bench_type TrustLLM --model_type Medusa --GPU_number 4
 #!/bin/bash
 # 定义温度列表
 temperatures="1.1 1.2 1.3 1.4 1.5 1.6 1.8"
@@ -31,6 +32,7 @@ echo "All temperature variations completed."
 # 
 # python queue_script.py --bench_type TrustLLM --model_type Baseline --GPU_number 8
 # 
+# python queue_script.py --bench_type MTBench --model_type Baseline --GPU_number 4
 # python queue_script.py --bench_type MTBench --model_type Baseline --GPU_number 4
 # python queue_script.py --bench_type TrustLLM --model_type Medusa --GPU_number 8
 # python queue_script.py --bench_type MTBench --model_type Kangaroo --GPU_number 4
