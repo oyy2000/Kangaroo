@@ -26,19 +26,6 @@ set_seed(seed)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-temperature_config = {
-    "writing": 0.7,
-    "roleplay": 0.7,
-    "extraction": 0.0,
-    "math": 0.0,
-    "coding": 0.0,
-    "reasoning": 0.0,
-    "stem": 0.1,
-    "humanities": 0.1,
-    "arena-hard-200": 0.0,
-}
-
-
 
 from fastchat.model import get_conversation_template
 
@@ -298,7 +285,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--model-id", type=str, required=True, default="vicuna-7b-v1.3")
     parser.add_argument(
-        "--bench-name",
+        "--bench-type",
         type=str,
         default="mt_bench",
         help="The name of the benchmark question set.",
@@ -368,9 +355,6 @@ if __name__ == "__main__":
         help="The medusa choices for medusa sampling.",
     )
 
-
-
-
     args = parser.parse_args()
 
     args.model_id = args.model_id + "-temp" + str(args.temperature) + "-do_sample" 
@@ -380,11 +364,11 @@ if __name__ == "__main__":
 
         ray.init()
 
-    question_file = f"data/{args.bench_name}/question.jsonl"
+    question_file = f"data/{args.bench_type}/question.jsonl"
     if args.answer_file:
         answer_file = args.answer_file
     else:
-        answer_file = f"data/{args.bench_name}/model_answer/{args.model_id}.jsonl"
+        answer_file = f"data/{args.bench_type}/model_answer/baseline/{args.model_id}.jsonl"
 
     print(f"Output to {answer_file}")
 

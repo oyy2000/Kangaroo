@@ -109,7 +109,7 @@ def build_command(args, gpu_id, params):
         if args.bench_type == "MTBench":
             return (
                 f'CUDA_VISIBLE_DEVICES={gpu_id} python -m evaluation.inference_{args.model_type.lower()}_{args.bench_type} '
-                f'--model-path "{args.model_type.lower()}-vicuna-7b-v1.3" '
+                f'--model-path "vicuna-7b-v1.3" '
                 f'--model-id "{args.model_type.lower()}-vicuna-7b-v1.3" --temperature {temperature} '
                 f'--bench-type "mt_bench" --max-new-token 256'
             )
