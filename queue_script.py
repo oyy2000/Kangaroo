@@ -72,7 +72,12 @@ def worker(task_queue, args, gpu_status):
                 break
             else:
                 print(f"No GPU available for task {index}. Waiting...")
-                time.sleep(5)
+                time.sleep(20)
+
+
+"""
+        CUDA_VISIBLE_DEVICES=0 python -m evaluation.inference_kangaroo_MTBench --model-path "vicuna-7b-v1.3" --adapter-path "kangaroo-vicuna-7b-v1.3" --exitlayer 2 --model-id "kangaroo-vicuna-7b-v1.3" --threshold 0.6 --temperature 1.1 --steps 6 --bench-name "mt_bench" --dtype "float16" --max-new-token 256 --max-length 512 --do_sample "top_p" --hyper_p 0.3
+"""
 
 def build_command(args, gpu_id, params):
     if args.model_type == "Kangaroo":
@@ -86,6 +91,7 @@ def build_command(args, gpu_id, params):
                 f'--dtype "float16" --max-new-token 256 --max-length 512 '
                 f'--do_sample "top_p" --hyper_p {top_p}'
             )
+
         elif args.bench_type == "TrustLLM":
             return (
                 f"CUDA_VISIBLE_DEVICES={gpu_id} python -m evaluation.inference_kangaroo_typical_sampling "
@@ -115,7 +121,8 @@ def build_command(args, gpu_id, params):
             )
 
             """
-            CUDA_VISIBLE_DEVICES=0 python -m evaluation.inference_baseline_MTBench --model-path "baseline-vicuna-7b-v1.3" --model-id "baseline-vicuna-7b-v1.3" --temperature 1.1 --bench-name "mt_bench" --max-new-token 256
+            CUDA_VISIBLE_DEVICES=0 python -m evaluation.inference_baseline_MTBench --model-path "vicuna-7b-v1.3" --model-id "baseline-vicuna-7b-v1.3" --temperature 1.1 --bench-type "mt_bench" --max-new-token 256
+            CUDA_VISIBLE_DEVICES=0 python -m evaluation.inference_medusa_MTBench --model-path "vicuna-7b-v1.3" --model-id "medusa-vicuna-7b-v1.3" --temperature 1.1 --bench-type "mt_bench" --max-new-token 256
             """
 
         elif args.bench_type == "TrustLLM":

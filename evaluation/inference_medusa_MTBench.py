@@ -422,7 +422,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--model-id", type=str, required=True)
     parser.add_argument(
-        "--bench-name",
+        "--bench-type",
         type=str,
         default="mt_bench",
         help="The name of the benchmark question set.",
@@ -524,11 +524,11 @@ if __name__ == "__main__":
 
         ray.init()
 
-    question_file = f"data/{args.bench_name}/question.jsonl"
+    question_file = f"data/{args.bench_type}/question.jsonl"
     if args.answer_file:
         answer_file = args.answer_file
     else:
-        answer_file = f"data/{args.bench_name}/model_answer/{args.model_id}.jsonl"
+        answer_file = f"data/{args.bench_type}/model_answer/{args.model_id}.jsonl"
 
     print(f"Output to {answer_file}")
 

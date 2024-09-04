@@ -102,78 +102,6 @@ def get_model_answers(
     cuda_visible_devices = os.environ.get('CUDA_VISIBLE_DEVICES')
     print('CUDA VISIBLE DEVICES:', cuda_visible_devices)
 
-    question = questions[0]
-
-    # warmup
-    for _ in range(1):
-        torch.manual_seed(0)
-        conv = get_conversation_template("vicuna")
-        turns = []
-        idxs = []
-        new_tokens = []
-        wall_time = []
-        for j in range(len(question["turns"])):
-            qs = question["turns"][j]
-            conv.append_message(conv.roles[0], qs)
-            conv.append_message(conv.roles[1], None)
-            prompt = conv.get_prompt()
-            inputs = tokenizer([prompt], return_tensors="pt").to("cuda")
-            input_ids = inputs.input_ids
-            # try:
-            torch.cuda.synchronize()
-            start_time = time.time()
-            output_ids, new_token, idx, accept_length_tree = forward_func(
-                inputs,
-                model,
-                tokenizer,
-                max_new_tokens,
-                **kwargs,
-            )
-            torch.cuda.synchronize()
-            total_time = time.time() - start_time
-        # except:
-            print("ERROR when forwarding ERROR ID: ", question["question_id"])
-            output = "ERROR"
-            try:   
-                output_ids = output_ids[0][len(input_ids[0]):]
-                # be consistent with the template's stop_token_ids
-                if conv.stop_token_ids:
-                    stop_token_ids_index = [
-                        i
-                        for i, id in enumerate(output_ids)
-                        if id in conv.stop_token_ids
-                    ]
-                    if len(stop_token_ids_index) > 0:
-                        output_ids = output_ids[: stop_token_ids_index[0]]
-
-                output = tokenizer.decode(
-                    output_ids,
-                    spaces_between_special_tokens=False,
-                )
-                # conv.stop_str = "</s>"
-                if conv.stop_str and output.find(conv.stop_str) > 0:
-                    output = output[: output.find(conv.stop_str)]
-                for special_token in tokenizer.special_tokens_map.values():
-                    if isinstance(special_token, list):
-                        for special_tok in special_token:
-                            output = output.replace(special_tok, "")
-                    else:
-                        output = output.replace(special_token, "")
-                output = output.strip()
-
-                if conv.name == "xgen" and output.startswith("Assistant:"):
-                    output = output.replace("Assistant:", "", 1).strip()
-            except RuntimeError as e:
-                print("ERROR question ID: ", question["question_id"])
-                output = "ERROR"
-
-            turns.append(output)
-            idxs.append(int(idx))
-            new_tokens.append(int(new_token))
-            wall_time.append(total_time)
-            conv.messages[-1][-1] = output
-    print('Warmup done')
-
     accept_lengths_tree = []
     for question in tqdm(questions):
 
@@ -196,7 +124,7 @@ def get_model_answers(
                 try:
                     torch.cuda.synchronize()
                     start_time = time.time()
-                    output_ids = forward_func(
+                    output_ids, new_token, idx, accept_length_tree = forward_func(
                         inputs,
                         model,
                         tokenizer,
@@ -415,7 +343,7 @@ def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample="typica
 
             elif do_sample == "top_p":
                 # set the temperature
-                logits = logits / temperature
+                logits = logits / (temperature + 1e-20)   
                 probs = F.softmax(logits , dim=-1)  # 将logits转换为概率分布
                 sorted_probs, sorted_indices = torch.sort(probs, descending=True)  # 将概率从大到小排序
                 cumulative_probs = sorted_probs.cumsum(dim=-1)  # 计算累积概率
@@ -622,9 +550,9 @@ if __name__ == "__main__":
 
     model_id = f"vicuna-7b-v1.3-kangaroo-{args.do_sample}_{parameter}_temp_{args.temperature}"
 
-    os.makedirs(f"data/{args.bench_name}/{args.model_id}", exist_ok=True)
+    os.makedirs(f"data/{args.bench_name}/model_answer/kangaroo/{args.model_id}", exist_ok=True)
 
-    answer_file = f"data/mt_bench/{model_id}.jsonl"
+    answer_file = f"data/mt_bench/model_answer/kangaroo/{model_id}.jsonl"
     print(f"Output to {answer_file}")
 
 
