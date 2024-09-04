@@ -202,7 +202,7 @@ def get_model_answers(
     for choice in medusa_choices:
         if len(choice) > num_heads:
             num_heads = len(choice)
-    model_path = "checkpoints/medusa-vicuna-7b-v1.3"
+    model_path = "medusa-vicuna-7b-v1.3"
     model = MedusaModel.from_pretrained(
         model_path,
         # medusa_num_heads = num_heads,
