@@ -214,7 +214,7 @@ def fuse_layers(layer_output, final_logits, model, temperature=1.0, alpha=0.01):
     layer_logits = model.lm_head(layer_output)
 
     # Calculate entropy of the fusion layer's output
-    entropy = calculate_entropy(layer_logits[:, -1, :])  # Only use the last token's logits for entropy calculation
+    # entropy = calculate_entropy(layer_logits[:, -1, :])  # Only use the last token's logits for entropy calculation
     
     # Calculate alpha using sigmoid function
     # alpha = 0.1 # torch.sigmoid(-entropy) + 0.5

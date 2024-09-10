@@ -101,14 +101,28 @@ def build_command(args, gpu_id, params):
                 f"--max-new-tokens 1024 --hyper_p {top_p}"
             )
     elif args.model_type == "Fusion":
-        temperature, fusion_layer = params
+        temperature, fusion_layer, alpha = params
         if args.bench_type == "TrustLLM":
             return (
                 f'CUDA_VISIBLE_DEVICES={gpu_id} python -m evaluation.inference_distribution_fusion '
                 f'--task "safety" --subtask "jailbreak" --model-path "vicuna-7b-v1.3" --adapter-path "kangaroo-vicuna-7b-v1.3" '
                 f'--exitlayer 2 --model-id "kangaroo-vicuna-7b-v1.3" --threshold 0.6 '
                 f'--temperature {temperature} --steps 6 --bench-name "TrustLLM" '
-                f'--dtype "float16" --max-new-token 256 --fusion-layer {fusion_layer} '
+                f'--dtype "float16" --max-new-token 256 --fusion-layer {fusion_layer} --alpha {alpha}'
+            )
+            
+            """
+                CUDA_VISIBLE_DEVICES=0 python -m evaluation.inference_distribution_fusion --task "safety" --subtask "jailbreak" --model-path "vicuna-7b-v1.3" --adapter-path "kangaroo-vicuna-7b-v1.3" --exitlayer 2 --model-id "kangaroo-vicuna-7b-v1.3" --threshold 0.6 --temperature 0.7 --steps 6 --bench-name "TrustLLM" --dtype "float16" --max-new-token 256 --fusion-layer 2
+            """
+    elif args.model_type == "Fusion2":
+        temperature, fusion_layer, alpha = params
+        if args.bench_type == "TrustLLM":
+            return (
+                f'CUDA_VISIBLE_DEVICES={gpu_id} python -m evaluation.inference_distribution_fusion '
+                f'--task "safety" --subtask "jailbreak" --model-path "vicuna-7b-v1.3" --adapter-path "kangaroo-vicuna-7b-v1.3" '
+                f'--exitlayer 2 --model-id "kangaroo-vicuna-7b-v1.3" --threshold 0.6 '
+                f'--temperature {temperature} --steps 6 --bench-name "TrustLLM" '
+                f'--dtype "float16" --max-new-token 256 --fusion-layer 2 --alpha {alpha}'
             )
     elif args.model_type in ["Baseline", "Medusa"]:
         temperature = params[0]
@@ -140,14 +154,16 @@ def main():
     args = parse_arguments()
     
     # temperature_values = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 2.0]
-    temperature_values = [1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.8]
+    # temperature_values = [1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.8]
+    temperature_values = [0.3, 0.7, 1.0]
+    
     
     # temperature_values = [0.0]
     
     # temperature_values = [0.0]
     top_p_values = [0.3, 0.5]
     fusion_layers = [5, 10, 15, 25]
-    alphas = [0.1, 0.01, 0.001]
+    alphas = [0.01, 0.001, 1e-4, 1e-5]
     
     task_queue = Queue()
     
@@ -155,7 +171,7 @@ def main():
         combinations = list(product(top_p_values, temperature_values))
         for i, combo in enumerate(combinations):
             task_queue.put((i, combo))
-    elif args.model_type == "Fusion":
+    elif args.model_type == "Fusion" or args.model_type == "Fusion2":
         combinations = list(product(temperature_values, fusion_layers, alphas))
         for i, combo in enumerate(combinations):
             task_queue.put((i, combo))

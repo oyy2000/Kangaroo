@@ -32,33 +32,6 @@ set_seed(seed)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-def load_quantized_model_and_tokenizer(model_name, adapter_path, device, dtype):
-    # Load tokenizer
-    tokenizer = AutoTokenizer.from_pretrained(model_name)
-    
-    # Load quantized model
-    if dtype == "int8":
-        model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto", load_in_8bit=True)
-    elif dtype == "int4":
-        model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto", load_in_4bit=True)
-    else:
-        model = AutoModelForCausalLM.from_pretrained(model_name, device_map="auto", torch_dtype=getattr(torch, dtype))
-    
-    # Load and quantize AdapterModel
-    config = LlamaConfig.from_pretrained(os.path.join(adapter_path, "config.json"))
-    adapter_model = AdapterModel(config)
-    adapter_state_dict = torch.load(os.path.join(adapter_path, "pytorch_model.bin"), map_location="cpu")
-    
-    # Quantize adapter weights
-    for key, value in adapter_state_dict.items():
-        if value.dtype == torch.float32:
-            adapter_state_dict[key] = value.to(getattr(torch, dtype))
-    
-    adapter_model.load_state_dict(adapter_state_dict, strict=False)
-    adapter_model = adapter_model.eval().to(device)
-    
-    return model, tokenizer, adapter_model
-
 def save_json(data, file_path):
     with open(file_path, 'w', encoding='utf-8') as f:
         json.dump(data, f, ensure_ascii=False, indent=4)
@@ -138,6 +111,8 @@ def get_model_answers(
             # torch.manual_seed(i)
             conv = get_conversation_template("vicuna")
             turns = []
+            idxs = []
+            new_tokens = []
             wall_time = []
             q_prompt = question["prompt"]
             conv.append_message(conv.roles[0], q_prompt)
@@ -258,7 +233,7 @@ def fuse_layers(layer_output, final_logits, model, temperature=1.0, alpha=0.1):
     return fused_probs
 
 # Modify the generate_with_fusion function to use the AdapterModel
-def generate_with_fusion(model, adapter_model, tokenizer, input_ids, max_new_tokens, temperature=1.0, batch_size=1, fusion_layer=2, alpha=0.1, **kwargs):
+def generate_with_fusion(model, adapter_model, tokenizer, input_ids, max_new_tokens, temperature=1.0, batch_size=10, fusion_layer=2, alpha=0.1, **kwargs):
     device = next(model.parameters()).device
     input_ids = input_ids.to(device)
     batch_size = min(batch_size, input_ids.shape[0])
@@ -292,7 +267,6 @@ def generate_with_fusion(model, adapter_model, tokenizer, input_ids, max_new_tok
     return torch.cat(generated_tokens, dim=1)
 
 def generate_sequence(inputs, model, adapter_model, tokenizer, max_new_tokens, device, temperature=0.7, batch_size=10, **kwargs):
-
     input_ids = inputs.input_ids.to(device)
 
     generated_sequence = generate_with_fusion(model, adapter_model, tokenizer, input_ids, max_new_tokens, temperature, batch_size, **kwargs)
@@ -433,33 +407,23 @@ if __name__ == "__main__":
         type=float,
     )
 
-    parser.add_argument(
-        "--quantization",
-        type=str,
-        default="float16",
-        choices=["float32", "float16", "bfloat16", "int8", "int4"],
-        help="Quantization type for the model.",
-    )
-    
     args = parser.parse_args()
-    
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    model_name = "vicuna-7b-v1.3"
-    model, tokenizer, adapter_model = load_quantized_model_and_tokenizer(
-        args.model_path, 
-        args.adapter_path, 
-        device, 
-        args.quantization
-    )
     
     question_file = f"data/eval_data/{args.task}/{args.subtask}.json"
 
-    # # Initialize and load AdapterModel
-    # adapter_model_path = args.adapter_path
-    # config = LlamaConfig.from_pretrained(os.path.join(adapter_model_path, "config.json"))
-    # adapter_model = AdapterModel(config)
-    # adapter_model.load_state_dict(torch.load(os.path.join(adapter_model_path, "pytorch_model.bin"), map_location="cpu"), strict=False)
-    # adapter_model = adapter_model.eval().to(device)
+    model_name = "vicuna-7b-v1.3"
+    tokenizer = AutoTokenizer.from_pretrained(model_name)
+    model = AutoModelForCausalLM.from_pretrained(model_name)
+    # Move model to GPU if available
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = model.to(device)
+
+    # Initialize and load AdapterModel
+    adapter_model_path = args.adapter_path
+    config = LlamaConfig.from_pretrained(os.path.join(adapter_model_path, "config.json"))
+    adapter_model = AdapterModel(config)
+    adapter_model.load_state_dict(torch.load(os.path.join(adapter_model_path, "pytorch_model.bin"), map_location="cpu"), strict=False)
+    adapter_model = adapter_model.eval().to(device)
     
    
     if args.do_sample == "top_k":
