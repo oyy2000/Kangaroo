@@ -9,10 +9,17 @@ import psutil
 def parse_arguments():
     parser = argparse.ArgumentParser(description="Task Executor for GPU-based Evaluation")
     parser.add_argument("--bench_type", type=str, required=True, help="Benchmark type (e.g., MMLU or TrustLLM)")
-    parser.add_argument("--model_type", type=str, required=True, help="Model type (e.g., Kangaroo or Baseline)")
+    parser.add_argument("--model_type", type=str, required=True, help="Model type (e.g., Kangaroo, Baseline, Fusion, or Fusion2)")
     parser.add_argument("--GPU_number", type=int, required=True, help="Number of GPUs to use")
     parser.add_argument("--interval", type=int, default=20, help="Interval between command executions in seconds")
     parser.add_argument("--ramp_up_time", type=int, default=120, help="Time to wait for GPU memory to ramp up (seconds)")
+    
+    # New arguments for temperature, top_p, fusion_layers, and alphas
+    parser.add_argument("--temperatures", type=float, nargs='+', default=[0.2, 0.4, 0.6, 1.0], help="List of temperature values")
+    parser.add_argument("--top_p_values", type=float, nargs='+', default=[0.3, 0.5], help="List of top_p values")
+    parser.add_argument("--fusion_layers", type=int, nargs='+', default=[2], help="List of fusion layers")
+    parser.add_argument("--alphas", type=float, nargs='+', default=[0.2, 0.1, 0.05, 0.01], help="List of alpha values")
+    
     return parser.parse_args()
 
 def get_gpu_total_memory():
@@ -141,7 +148,7 @@ def build_command(args, gpu_id, params):
                 CUDA_VISIBLE_DEVICES=0 python -m evaluation.inference_distribution_fusion --task "safety" --subtask "jailbreak" --model-path "vicuna-7b-v1.3" --adapter-path "kangaroo-vicuna-7b-v1.3" --exitlayer 2 --model-id "kangaroo-vicuna-7b-v1.3" --threshold 0.6 --temperature 0.7 --steps 6 --bench-name "TrustLLM" --dtype "float16" --max-new-token 256 --fusion-layer 2
             """
     elif args.model_type == "Fusion2":
-        temperature, fusion_layer, alpha = params
+        temperature, alpha = params
         if args.bench_type == "TrustLLM":
             return (
                 f'CUDA_VISIBLE_DEVICES={gpu_id} python -m evaluation.inference_distribution_fusion_2 '
@@ -179,30 +186,22 @@ def build_command(args, gpu_id, params):
 def main():
     args = parse_arguments()
     
-    # temperature_values = [0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 2.0]
-    # temperature_values = [1.1, 1.2, 1.3, 1.4, 1.5, 1.6, 1.8]
-    temperature_values = [0.2, 0.4, 0.6, 1.0]
-    
-    # temperature_values = [0.0]
-    
-    # temperature_values = [0.0]
-    top_p_values = [0.3, 0.5]
-    fusion_layers = [2, 5, 10, 15, 25]
-    # alphas = [0.01, 0.001, 1e-4, 1e-5]
-    alphas = [0.2, 0.1, 0.05, 0.01]
-    
     task_queue = Queue()
     
     if args.model_type == "Kangaroo":
-        combinations = list(product(top_p_values, temperature_values))
+        combinations = list(product(args.top_p_values, args.temperatures))
         for i, combo in enumerate(combinations):
             task_queue.put((i, combo))
-    elif args.model_type == "Fusion" or args.model_type == "Fusion2":
-        combinations = list(product(temperature_values, fusion_layers, alphas))
+    elif args.model_type == "Fusion":
+        combinations = list(product(args.temperatures, args.fusion_layers, args.alphas))
         for i, combo in enumerate(combinations):
             task_queue.put((i, combo))
-    else:    
-        for i, temp in enumerate(temperature_values):
+    elif args.model_type == "Fusion2":
+        combinations = list(product(args.temperatures, args.alphas))
+        for i, combo in enumerate(combinations):
+            task_queue.put((i, combo))
+    else:  # Baseline
+        for i, temp in enumerate(args.temperatures):
             task_queue.put((i, (temp,)))
     
     # Add sentinel values to signal workers to exit
