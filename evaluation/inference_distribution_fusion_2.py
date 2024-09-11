@@ -413,7 +413,13 @@ if __name__ == "__main__":
 
     model_name = "vicuna-7b-v1.3"
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(model_name)
+    
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype=torch.float16,
+        low_cpu_mem_usage=True,
+        device_map="auto"
+    )
     # Move model to GPU if available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)
@@ -424,6 +430,8 @@ if __name__ == "__main__":
     adapter_model = AdapterModel(config)
     adapter_model.load_state_dict(torch.load(os.path.join(adapter_model_path, "pytorch_model.bin"), map_location="cpu"), strict=False)
     adapter_model = adapter_model.eval().to(device)
+    if args.dtype == "float16":
+        adapter_model = adapter_model.half()
     
    
     if args.do_sample == "top_k":
@@ -435,7 +443,7 @@ if __name__ == "__main__":
 
     model_id = f"vicuna-7b-v1.3-df2-temp-{args.temperature}-layer-{args.fusion_layer}-alpha-{args.alpha}"
     args.model_id = model_id
-    answer_file_dir = f"data/{args.bench_name}/dynamic_fusion/{args.model_id}/{args.task}"
+    answer_file_dir = f"data/{args.bench_name}/dynamic_fusion_2/{args.model_id}/{args.task}"
     os.makedirs(answer_file_dir, exist_ok=True)
     answer_file_name = f"{args.subtask}.json"
     

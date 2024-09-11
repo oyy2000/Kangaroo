@@ -6,4 +6,4 @@ __pycache__
 /saved_evaluations
 .locks
 /models--lmsys--vicuna-7b-v1.3
-huggingface_evaluator.log
+./huggingface_evaluator.log

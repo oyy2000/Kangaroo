@@ -36,4 +36,8 @@ echo "All temperature variations completed."
 # python queue_script.py --bench_type MTBench --model_type Baseline --GPU_number 4
 # python queue_script.py --bench_type TrustLLM --model_type Medusa --GPU_number 8
 # python queue_script.py --bench_type MTBench --model_type Kangaroo --GPU_number 4
-python queue_script.py --bench_type TrustLLM --model_type Fusion2 --GPU_number 4
+python queue_script.py --bench_type TrustLLM --model_type Fusion --GPU_number 4
+
+/home/kz34/Yang_Ouyang_Projects/Medusa_ENV
+/home/kz34/Yang_Ouyang_Projects/TrustLLM_ENV
+/home/kz34/Yang_Ouyang_Projects/Kangaroo_ENV

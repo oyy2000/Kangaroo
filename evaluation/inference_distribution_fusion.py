@@ -218,7 +218,6 @@ def fuse_layers(layer_output, final_logits, model, temperature=1.0, alpha=0.01):
     
     # Calculate alpha using sigmoid function
     # alpha = 0.1 # torch.sigmoid(-entropy) + 0.5
-    print("alpha2 =", alpha)
     # Apply temperature scaling
     layer_logits /= (temperature + 1e-5)
     final_logits /= (temperature + 1e-5)
@@ -263,7 +262,6 @@ def generate_with_fusion(model, tokenizer, input_ids, max_new_tokens, temperatur
     return torch.cat(generated_tokens, dim=1)
 
 def generate_sequence(inputs, model, tokenizer, max_new_tokens, device, temperature=0.7, batch_size=10, fusion_layer=15, alpha=0.1, **kwargs):
-    print("alpha =" , alpha)
     input_ids = inputs.input_ids.to(device)
 
     generated_sequence = generate_with_fusion(model, tokenizer, input_ids, max_new_tokens, temperature, batch_size, fusion_layer, alpha)
@@ -411,8 +409,13 @@ if __name__ == "__main__":
 
     model_name = "vicuna-7b-v1.3"
     tokenizer = AutoTokenizer.from_pretrained(model_name)
-    model = AutoModelForCausalLM.from_pretrained(model_name)
 
+    model = AutoModelForCausalLM.from_pretrained(
+        model_name,
+        torch_dtype=torch.float16,
+        low_cpu_mem_usage=True,
+        device_map="auto"
+    )
     # Move model to GPU if available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model = model.to(device)

@@ -32,7 +32,7 @@ set_seed(seed)
 torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
-def medusa_forward(input_ids, model, tokenizer, medusa_choices, temperature, posterior_threshold, posterior_alpha, top_p=0.8, sampling = 'typical', fast = True, max_steps = 256):
+def medusa_forward(input_ids, model, tokenizer, medusa_choices, temperature, posterior_threshold, posterior_alpha, top_p=0.8, sampling = 'typical', fast = True, max_steps = 256, max_new_token = 1024):
     print("temperature", temperature)
     assert input_ids.shape[0] == 1, "Only support batch size 1 for now!!"
     # Avoid modifying the input_ids in-place
@@ -108,7 +108,7 @@ def medusa_forward(input_ids, model, tokenizer, medusa_choices, temperature, pos
             )
         if tokenizer.eos_token_id in input_ids[0, input_len:].tolist():
             break
-        if new_token > 1024:
+        if new_token > max_new_token:
             break
     return input_ids, new_token, idx
 
@@ -261,6 +261,7 @@ def get_model_answers(
                         top_p=top_p,
                         sampling=sampling,
                         fast = fast,
+                        max_new_token=max_new_token,
                     )
                     torch.cuda.synchronize()
                     total_time = time.time() - start_time
