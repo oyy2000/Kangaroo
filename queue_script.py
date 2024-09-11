@@ -118,10 +118,10 @@ def build_command(args, gpu_id, params):
         temperature, fusion_layer, alpha = params
         if args.bench_type == "TrustLLM":
             return (
-                f'CUDA_VISIBLE_DEVICES={gpu_id} python -m evaluation.inference_distribution_fusion '
+                f'CUDA_VISIBLE_DEVICES={gpu_id} python -m evaluation.inference_distribution_fusion_2 '
                 f'--task "safety" --subtask "jailbreak" --model-path "vicuna-7b-v1.3" --adapter-path "kangaroo-vicuna-7b-v1.3" '
                 f'--exitlayer 2 --model-id "kangaroo-vicuna-7b-v1.3" --threshold 0.6 '
-                f'--temperature {temperature} --steps 6 --bench-name "TrustLLM" '
+                f'--temperature {temperature} --steps 6 --bench-name "TrustLLM" --do_sample "top_p" '
                 f'--dtype "float16" --max-new-token 256 --fusion-layer 2 --alpha {alpha}'
             )
     elif args.model_type in ["Baseline", "Medusa"]:
@@ -163,7 +163,8 @@ def main():
     # temperature_values = [0.0]
     top_p_values = [0.3, 0.5]
     fusion_layers = [5, 10, 15, 25]
-    alphas = [0.01, 0.001, 1e-4, 1e-5]
+    # alphas = [0.01, 0.001, 1e-4, 1e-5]
+    alphas = [0.5, 0.1]
     
     task_queue = Queue()
     

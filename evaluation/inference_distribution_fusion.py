@@ -218,7 +218,7 @@ def fuse_layers(layer_output, final_logits, model, temperature=1.0, alpha=0.01):
     
     # Calculate alpha using sigmoid function
     # alpha = 0.1 # torch.sigmoid(-entropy) + 0.5
-    
+    print("alpha2 =", alpha)
     # Apply temperature scaling
     layer_logits /= (temperature + 1e-5)
     final_logits /= (temperature + 1e-5)
@@ -232,7 +232,7 @@ def fuse_layers(layer_output, final_logits, model, temperature=1.0, alpha=0.01):
     
     return fused_probs
 
-def generate_with_fusion(model, tokenizer, input_ids, max_new_tokens, temperature=1.0, batch_size=10, fusion_layer=15, **kwargs):
+def generate_with_fusion(model, tokenizer, input_ids, max_new_tokens, temperature=1.0, batch_size=10, fusion_layer=15, alpha=0.1, **kwargs):
     device = next(model.parameters()).device
     input_ids = input_ids.to(device)
     batch_size = min(batch_size, input_ids.shape[0])
@@ -249,7 +249,7 @@ def generate_with_fusion(model, tokenizer, input_ids, max_new_tokens, temperatur
         layer_output = outputs.hidden_states[fusion_layer]
         final_logits = outputs.logits  # Use the logits directly from the model output
 
-        fused_probs = fuse_layers(layer_output, final_logits, model, temperature)
+        fused_probs = fuse_layers(layer_output, final_logits, model, temperature, alpha)
 
         next_token_probs = fused_probs[:, -1, :]
         next_tokens = torch.multinomial(next_token_probs, num_samples=1)
@@ -262,10 +262,11 @@ def generate_with_fusion(model, tokenizer, input_ids, max_new_tokens, temperatur
 
     return torch.cat(generated_tokens, dim=1)
 
-def generate_sequence(inputs, model, tokenizer, max_new_tokens, device, temperature=0.7, batch_size=10, fusion_layer=15, **kwargs):
+def generate_sequence(inputs, model, tokenizer, max_new_tokens, device, temperature=0.7, batch_size=10, fusion_layer=15, alpha=0.1, **kwargs):
+    print("alpha =" , alpha)
     input_ids = inputs.input_ids.to(device)
 
-    generated_sequence = generate_with_fusion(model, tokenizer, input_ids, max_new_tokens, temperature, batch_size, fusion_layer)
+    generated_sequence = generate_with_fusion(model, tokenizer, input_ids, max_new_tokens, temperature, batch_size, fusion_layer, alpha)
     
     full_sequence = torch.cat([input_ids, generated_sequence], dim=1)
     
