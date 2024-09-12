@@ -207,16 +207,19 @@ def get_model_answers(
         f.write(f"jailbreak score: {jailbreak_score}\n")
 
 
-def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample="typical", max_length = 2048, EARLY_STOP_LAYER = 2, SPECULATIVE_DECODING_STEPS = 6, temperature = 0.7, threshold = 0.6, hyper_k = 2, hyper_p = 0.8, epsilon = 0.3, delta = 0.09):
+def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample="typical", EARLY_STOP_LAYER = 2, SPECULATIVE_DECODING_STEPS = 6, temperature = 0.7, threshold = 0.6, hyper_k = 2, hyper_p = 0.8, epsilon = 0.3, delta = 0.09):
+    print("temperature", temperature)
     context_tokens = inputs.input_ids # 把prompt转换成token
     device = context_tokens.device 
     token_eos = tokenizer.eos_token_id # 1
     batch_size, context_length = context_tokens.shape # batchsize, input_length
-    global_tokens = torch.ones((batch_size, max_length), dtype=torch.long, device=device) * token_eos # 用于存储本轮输出，生成一个全是1的tensor，大小为batchsize, max_length
-    global_position_ids = torch.LongTensor([[i for i in range(max_length)]]).to(device) # 生成一个从0到max_length的tensor，作为position_ids 
+    start_index = context_length # 从context_length开始，也就是 prompt的下一个token
+    
+    global_tokens = torch.ones((batch_size, start_index + max_new_tokens), dtype=torch.long, device=device) * token_eos # 用于存储本轮输出，生成一个全是1的tensor，大小为batchsize, max_length
+    global_position_ids = torch.LongTensor([[i for i in range(start_index + max_new_tokens)]]).to(device) # 生成一个从0到max_length的tensor，作为position_ids 
     accept_length_list = [1] # 每次接收小模型token长度的list, 生成一个长度为1的list，值为1
 
-    start_index = context_length # 从context_length开始，也就是 prompt的下一个token
+    
     global_tokens[:, :start_index] = context_tokens # 把prompt的token放到global_tokens的前面， : 是一个左闭右开的区间，所以不包含start_index
 
     # Init KV-chache and sample the first token
@@ -238,7 +241,7 @@ def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample="typica
     total_inference_steps = 0
 
     with torch.no_grad():
-        max_infer_steps = min(max_length, start_index + max_new_tokens)
+        max_infer_steps = start_index + max_new_tokens
         stop = False
         # 使用draft model进行快速推理
         while start_index < max_infer_steps - 1 - SPECULATIVE_DECODING_STEPS:
@@ -294,105 +297,8 @@ def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample="typica
             posterior_threshold = epsilon # 0.3
             posterior_alpha = delta # 0.09
             
-            if do_sample == "typical":
-                for i in range(output_length):
-                    if i == output_length - 1 or output_tokens[0, i] == token_eos or output_tokens[0, i] != global_tokens[0, start_index + 1 + i]:
-                        # apply typical acceptance here
-                        posterior_prob = torch.softmax(logits[:, i, :] / temperature, dim=-1)
-                        posterior_entropy = -torch.sum(
-                            posterior_prob * torch.log(posterior_prob + 1e-5), dim=-1
-                        )  # torch.sum(torch.log(*)) is faster than torch.prod
-                        threshold = torch.minimum(
-                            torch.ones_like(posterior_entropy) * posterior_threshold,
-                            torch.exp(-posterior_entropy) * posterior_alpha,
-                        )
-                        is_accepted = posterior_prob.max(dim=-1).values > threshold
-                        if is_accepted:
-                            start_index += 1
-                        else:
-                            start_index += 1
-                            stop = True
-                        if output_tokens[0, i] == token_eos:
-                            stop = True
-                        if stop or start_index >= max_infer_steps:
-                            break
-
-            elif do_sample == "typical_sampling":
-                for i in range(output_length):
-                    # Calculate posterior probabilities
-                    posterior_prob = torch.softmax(logits[:, i, :] / temperature, dim=-1)
-                    
-                    # Calculate the entropy of the distribution
-                    posterior_entropy = -torch.sum(posterior_prob * torch.log(posterior_prob + 1e-5), dim=-1)
-                    
-                    # Sort probabilities and calculate cumulative probabilities
-                    sorted_prob, sorted_indices = torch.sort(posterior_prob, descending=True)
-                    cumulative_probs = torch.cumsum(sorted_prob, dim=-1)
-                    
-                    # Find the smallest k such that the cumulative probability exceeds the threshold
-                    threshold = torch.minimum(
-                        torch.ones_like(posterior_entropy) * posterior_threshold,
-                        torch.exp(-posterior_entropy) * posterior_alpha,
-                    )
-                    cutoff_index = torch.sum(cumulative_probs < threshold.unsqueeze(-1), dim=-1)
-                    
-                    # Mask the logits for tokens beyond the cutoff
-                    mask = torch.ones_like(posterior_prob)
-                    for batch_idx in range(mask.size(0)):
-                        mask[batch_idx, cutoff_index[batch_idx]:] = 0
-                    
-                    # Re-normalize the probabilities
-                    filtered_prob = posterior_prob * mask
-                    filtered_prob = filtered_prob / filtered_prob.sum(dim=-1, keepdim=True)
-                    
-                    # Sample from the filtered distribution
-                    sampled_index = torch.multinomial(filtered_prob, 1).squeeze(-1)
-                    
-                    # Set the selected token in global_tokens
-                    global_tokens[0, start_index + 1 + i] = sorted_indices[0, sampled_index]
-                    start_index = start_index + 1 + i
-                    
-                    # Check for end-of-sequence token
-                    if global_tokens[0, start_index] == token_eos:
-                        stop = True
-                        break
-
-            elif do_sample == "top_p":
-                # set the temperature
-                logits = logits / (temperature + 1e-20)  
-                probs = F.softmax(logits , dim=-1)  # 将logits转换为概率分布
-                sorted_probs, sorted_indices = torch.sort(probs, descending=True)  # 将概率从大到小排序
-                cumulative_probs = sorted_probs.cumsum(dim=-1)  # 计算累积概率
-                top_p_mask = cumulative_probs <= hyper_p  # 找出累积概率小于等于hyper_p的token
-                top_p_mask[..., 1:] = top_p_mask[..., :-1].clone()  # 确保至少有一个token被选择
-                top_p_mask[..., 0] = True  # 确保第一个token被选择
-                output_top_p_tokens = sorted_indices.masked_select(top_p_mask)  # 选择这些token
- 
-                output_lenght = end_index - start_index
-                for i in range(output_lenght):
-                    if i == output_lenght-1 or output_tokens[0, i] == token_eos or global_tokens[0, start_index+1+i] not in output_top_p_tokens:
-                        global_tokens[0, start_index+1+i] = output_tokens[0, i]
-                        start_index = start_index+1+i
-                        if output_tokens[0, i] == token_eos:
-                            stop = True
-                        break
-
-
-            elif do_sample == "top_k":
-                # Verification for top-k sampling
-                output_topk_tokens = torch.topk(logits,k=hyper_k,dim=-1).indices
-
-                output_lenght = end_index - start_index
-                for i in range(output_lenght):
-
-                    if i == output_lenght-1 or output_tokens[0, i] == token_eos or global_tokens[0, start_index+1+i] not in output_topk_tokens[0, i, :]:
-                        global_tokens[0, start_index+1+i] = output_tokens[0, i]
-                        start_index = start_index+1+i
-                        if output_tokens[0, i] == token_eos:
-                            stop = True
-                        break
-            # greedy decoding
-            else:
+            if temperature == 0.0:
+                print("greedy decoding")
                 for i in range(output_length):
                     if i == output_length - 1 or output_tokens[0, i] == token_eos or output_tokens[0, i] != global_tokens[0, start_index + 1 + i]:
                         global_tokens[0, start_index + 1 + i] = output_tokens[0, i]
@@ -400,6 +306,115 @@ def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample="typica
                         if output_tokens[0, i] == token_eos:
                             stop = True
                         break
+                
+                    
+            else:
+                if do_sample == "typical":
+                    for i in range(output_length):
+                        if i == output_length - 1 or output_tokens[0, i] == token_eos or output_tokens[0, i] != global_tokens[0, start_index + 1 + i]:
+                            # apply typical acceptance here
+                            posterior_prob = torch.softmax(logits[:, i, :] / temperature, dim=-1)
+                            posterior_entropy = -torch.sum(
+                                posterior_prob * torch.log(posterior_prob + 1e-5), dim=-1
+                            )  # torch.sum(torch.log(*)) is faster than torch.prod
+                            threshold = torch.minimum(
+                                torch.ones_like(posterior_entropy) * posterior_threshold,
+                                torch.exp(-posterior_entropy) * posterior_alpha,
+                            )
+                            is_accepted = posterior_prob.max(dim=-1).values > threshold
+                            if is_accepted:
+                                start_index += 1
+                            else:
+                                start_index += 1
+                                stop = True
+                            if output_tokens[0, i] == token_eos:
+                                stop = True
+                            if stop or start_index >= max_infer_steps:
+                                break
+
+                elif do_sample == "typical_sampling":
+                    for i in range(output_length):
+                        # Calculate posterior probabilities
+                        posterior_prob = torch.softmax(logits[:, i, :] / temperature, dim=-1)
+                        
+                        # Calculate the entropy of the distribution
+                        posterior_entropy = -torch.sum(posterior_prob * torch.log(posterior_prob + 1e-5), dim=-1)
+                        
+                        # Sort probabilities and calculate cumulative probabilities
+                        sorted_prob, sorted_indices = torch.sort(posterior_prob, descending=True)
+                        cumulative_probs = torch.cumsum(sorted_prob, dim=-1)
+                        
+                        # Find the smallest k such that the cumulative probability exceeds the threshold
+                        threshold = torch.minimum(
+                            torch.ones_like(posterior_entropy) * posterior_threshold,
+                            torch.exp(-posterior_entropy) * posterior_alpha,
+                        )
+                        cutoff_index = torch.sum(cumulative_probs < threshold.unsqueeze(-1), dim=-1)
+                        
+                        # Mask the logits for tokens beyond the cutoff
+                        mask = torch.ones_like(posterior_prob)
+                        for batch_idx in range(mask.size(0)):
+                            mask[batch_idx, cutoff_index[batch_idx]:] = 0
+                        
+                        # Re-normalize the probabilities
+                        filtered_prob = posterior_prob * mask
+                        filtered_prob = filtered_prob / filtered_prob.sum(dim=-1, keepdim=True)
+                        
+                        # Sample from the filtered distribution
+                        sampled_index = torch.multinomial(filtered_prob, 1).squeeze(-1)
+                        
+                        # Set the selected token in global_tokens
+                        global_tokens[0, start_index + 1 + i] = sorted_indices[0, sampled_index]
+                        start_index = start_index + 1 + i
+                        
+                        # Check for end-of-sequence token
+                        if global_tokens[0, start_index] == token_eos:
+                            stop = True
+                            break
+
+                elif do_sample == "top_p":
+                    # set the temperature
+                    logits = logits / temperature
+                    probs = F.softmax(logits , dim=-1)  # 将logits转换为概率分布
+                    sorted_probs, sorted_indices = torch.sort(probs, descending=True)  # 将概率从大到小排序
+                    cumulative_probs = sorted_probs.cumsum(dim=-1)  # 计算累积概率
+                    top_p_mask = cumulative_probs <= hyper_p  # 找出累积概率小于等于hyper_p的token
+                    top_p_mask[..., 1:] = top_p_mask[..., :-1].clone()  # 确保至少有一个token被选择
+                    top_p_mask[..., 0] = True  # 确保第一个token被选择
+                    output_top_p_tokens = sorted_indices.masked_select(top_p_mask)  # 选择这些token
+    
+                    output_lenght = end_index - start_index
+                    for i in range(output_lenght):
+                        if i == output_lenght-1 or output_tokens[0, i] == token_eos or global_tokens[0, start_index+1+i] not in output_top_p_tokens:
+                            global_tokens[0, start_index+1+i] = output_tokens[0, i]
+                            start_index = start_index+1+i
+                            if output_tokens[0, i] == token_eos:
+                                stop = True
+                            break
+
+
+                elif do_sample == "top_k":
+                    # Verification for top-k sampling
+                    output_topk_tokens = torch.topk(logits,k=hyper_k,dim=-1).indices
+
+                    output_lenght = end_index - start_index
+                    for i in range(output_lenght):
+
+                        if i == output_lenght-1 or output_tokens[0, i] == token_eos or global_tokens[0, start_index+1+i] not in output_topk_tokens[0, i, :]:
+                            global_tokens[0, start_index+1+i] = output_tokens[0, i]
+                            start_index = start_index+1+i
+                            if output_tokens[0, i] == token_eos:
+                                stop = True
+                            break
+                # greedy decoding
+                else:
+                    for i in range(output_length):
+                        if i == output_length - 1 or output_tokens[0, i] == token_eos or output_tokens[0, i] != global_tokens[0, start_index + 1 + i]:
+                            global_tokens[0, start_index + 1 + i] = output_tokens[0, i]
+                            start_index = start_index + 1 + i
+                            if output_tokens[0, i] == token_eos:
+                                stop = True
+                            break
                     
 
             accept_length_list.append(start_index - start_index_copy)

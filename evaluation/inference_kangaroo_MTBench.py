@@ -191,7 +191,6 @@ def get_model_answers(
 
 
 def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample="typical", EARLY_STOP_LAYER = 2, SPECULATIVE_DECODING_STEPS = 6, temperature = 0.7, threshold = 0.6, hyper_k = 2, hyper_p = 0.8, epsilon = 0.3, delta = 0.09):
-    print("temperature", temperature)
     context_tokens = inputs.input_ids # 把prompt转换成token
     device = context_tokens.device 
     token_eos = tokenizer.eos_token_id # 1
@@ -281,6 +280,7 @@ def kangaroo_forward(inputs, model, tokenizer, max_new_tokens, do_sample="typica
             posterior_alpha = delta # 0.09
             
             if temperature == 0.0:
+                # greedy decoding
                 for i in range(output_length):
                     if i == output_length - 1 or output_tokens[0, i] == token_eos or output_tokens[0, i] != global_tokens[0, start_index + 1 + i]:
                         global_tokens[0, start_index + 1 + i] = output_tokens[0, i]

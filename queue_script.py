@@ -36,7 +36,7 @@ def get_adaptive_threshold(total_memory):
     if total_memory >= 40000:  # 40GB 或以上
         return total_memory // 2
     elif total_memory >= 24000:  # 24GB
-        return 6000  # 6GB
+        return 12000  # 6GB
     else:
         return min(10000, total_memory // 4)  # 默认为 10GB 或总内存的 1/4，取较小值
 
@@ -118,7 +118,7 @@ def build_command(args, gpu_id, params):
                 f'--model-path "vicuna-7b-v1.3" --adapter-path "kangaroo-vicuna-7b-v1.3" '
                 f'--exitlayer 2 --model-id "kangaroo-vicuna-7b-v1.3" --threshold 0.6 '
                 f'--temperature {temperature} --steps 6 --bench-name "mt_bench" '
-                f'--dtype "float16" --max-new-token 256'
+                f'--dtype "float16" --max-new-token 256 '
                 f'--do_sample "top_p" --hyper_p {top_p}'
             )
             """ 
